@@ -226,6 +226,14 @@ func handleMultipart(c *gin.Context, p *bluemonday.Policy, skip map[string]bool)
 		}
 
 		fieldName := part.FormName()
+
+		if part.FileName() != "" {
+			if _, err := io.Copy(fw, part); err != nil {
+				return err
+			}
+			continue
+		}
+
 		if skip[fieldName] {
 			if _, err := io.Copy(fw, part); err != nil {
 				return err

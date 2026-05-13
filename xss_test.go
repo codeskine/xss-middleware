@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -344,4 +345,44 @@ func TestXssFiltersWithoutContentLength(t *testing.T) {
 	var got map[string]string
 	json.Unmarshal(w.Body.Bytes(), &got)
 	assert.Equal(t, "", got["name"])
+}
+
+// Bug #3: concurrent requests must not share policy state (race condition)
+func TestRegressionConcurrentRequestsNoRace(t *testing.T) {
+	r := newServer()
+	const goroutines = 20
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for range goroutines {
+		go func() {
+			defer wg.Done()
+			payload := `{"name":"<script>alert(1)</script>"}`
+			req, _ := http.NewRequest("POST", "/echo", strings.NewReader(payload))
+			req.Header.Set("Content-Type", "application/json")
+			req.ContentLength = int64(len(payload))
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusOK, w.Code)
+		}()
+	}
+	wg.Wait()
+}
+
+// Bug #9: multipart boundary with extra MIME params (e.g. charset) must not corrupt the boundary
+func TestRegressionMultipartBoundaryWithExtraParams(t *testing.T) {
+	r := newServer()
+	body := &bytes.Buffer{}
+	mw := multipart.NewWriter(body)
+	fw, _ := mw.CreateFormField("name")
+	fw.Write([]byte("<b>hello</b>"))
+	mw.Close()
+
+	req, _ := http.NewRequest("POST", "/echo_multipart", body)
+	// Set Content-Type with extra param after boundary — old string-split code would corrupt the boundary
+	req.Header.Set("Content-Type", "multipart/form-data; boundary="+mw.Boundary()+"; charset=utf-8")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "hello")
+	assert.NotContains(t, w.Body.String(), "<b>")
 }

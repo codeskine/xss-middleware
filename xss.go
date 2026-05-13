@@ -33,7 +33,10 @@ const (
 	maxJSONDepth            = 64
 )
 
-var errBodyTooLarge = errors.New("request body too large")
+var (
+	errBodyTooLarge    = errors.New("request body too large")
+	errInvalidMultipart = errors.New("invalid multipart content-type")
+)
 
 type countingReader struct {
 	r     io.Reader
@@ -81,16 +84,16 @@ func New(opts ...Option) gin.HandlerFunc {
 
 	return func(c *gin.Context) {
 		method := c.Request.Method
-		ct := c.Request.Header.Get("Content-Type")
 		var err error
 		switch method {
 		case "POST", "PUT", "PATCH":
-			switch {
-			case strings.Contains(ct, "application/json"):
+			mediaType, _, _ := mime.ParseMediaType(c.Request.Header.Get("Content-Type"))
+			switch mediaType {
+			case "application/json":
 				err = handleJSON(c, p, skip, maxBody)
-			case strings.Contains(ct, "application/x-www-form-urlencoded"):
+			case "application/x-www-form-urlencoded":
 				err = handleForm(c, p, skip, maxBody)
-			case strings.Contains(ct, "multipart/form-data"):
+			case "multipart/form-data":
 				err = handleMultipart(c, p, skip, maxMultipart)
 			}
 		case "GET":
@@ -295,7 +298,7 @@ func handleMultipart(c *gin.Context, p *bluemonday.Policy, skip map[string]bool,
 	ctHdr := c.Request.Header.Get("Content-Type")
 	_, params, err := mime.ParseMediaType(ctHdr)
 	if err != nil || params["boundary"] == "" {
-		return errors.New("invalid multipart content-type")
+		return errInvalidMultipart
 	}
 	boundary := params["boundary"]
 

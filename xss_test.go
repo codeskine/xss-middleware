@@ -626,6 +626,66 @@ func TestWithMaxBodySizeNegativeUsesDefault(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.Code)
 }
 
+// Content-Type case-insensitivity: APPLICATION/JSON must still be sanitized
+func TestContentTypeCaseInsensitiveJSON(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s := newServer()
+	req, _ := http.NewRequest("POST", "/echo", strings.NewReader(`{"name":"<script>alert(1)</script>"}`))
+	req.Header.Set("Content-Type", "APPLICATION/JSON")
+	resp := httptest.NewRecorder()
+	s.ServeHTTP(resp, req)
+	assert.Equal(t, http.StatusOK, resp.Code)
+	assert.NotContains(t, resp.Body.String(), "<script>")
+	assert.NotContains(t, resp.Body.String(), "\\u003cscript")
+}
+
+// Content-Type case-insensitivity: Application/X-WWW-Form-Urlencoded must still be sanitized
+func TestContentTypeCaseInsensitiveForm(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(New())
+	r.POST("/f", func(c *gin.Context) {
+		b, _ := readAll(c)
+		c.Data(200, "text/plain", b)
+	})
+	req, _ := http.NewRequest("POST", "/f", strings.NewReader("x=<script>alert(1)</script>"))
+	req.Header.Set("Content-Type", "Application/X-WWW-Form-Urlencoded")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	assert.Equal(t, http.StatusOK, resp.Code)
+	assert.NotContains(t, resp.Body.String(), "<script>")
+	assert.NotContains(t, resp.Body.String(), "%3Cscript%3E")
+}
+
+// Content-Type case-insensitivity: MULTIPART/FORM-DATA must still be sanitized
+func TestContentTypeCaseInsensitiveMultipart(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := new(bytes.Buffer)
+	mw := multipart.NewWriter(body)
+	_ = mw.WriteField("name", "<script>alert(1)</script>")
+	mw.Close()
+
+	// Use a raw-body echo route to avoid Gin's JSON re-encoding masking the bypass
+	r := gin.New()
+	r.Use(New())
+	r.POST("/raw", func(c *gin.Context) {
+		if err := c.Request.ParseMultipartForm(32 << 20); err != nil {
+			c.JSON(400, nil)
+			return
+		}
+		vals := c.Request.MultipartForm.Value["name"]
+		if len(vals) > 0 {
+			c.Data(200, "text/plain", []byte(vals[0]))
+		}
+	})
+	req, _ := http.NewRequest("POST", "/raw", body)
+	req.Header.Set("Content-Type", "MULTIPART/FORM-DATA; boundary="+mw.Boundary())
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	assert.Equal(t, http.StatusOK, resp.Code)
+	assert.NotContains(t, resp.Body.String(), "<script>")
+}
+
 // JSON nested 65 levels deep must not stack overflow; deep values are nil'd
 func TestJsonMaxDepth(t *testing.T) {
 	gin.SetMode(gin.TestMode)

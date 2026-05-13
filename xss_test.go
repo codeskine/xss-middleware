@@ -431,3 +431,43 @@ func TestBodySizeUnderLimitPasses(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.Code)
 	assert.JSONEq(t, `{"name":"hi"}`, resp.Body.String())
 }
+
+func TestBodySizeLimitMultipart(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s := newServer(WithMaxMultipartSize(100))
+	body := new(bytes.Buffer)
+	writer := multipart.NewWriter(body)
+	_ = writer.WriteField("name", strings.Repeat("a", 200))
+	writer.Close()
+	req, _ := http.NewRequest("POST", "/echo_multipart", body)
+	req.Header.Set("Content-Type", "multipart/form-data; boundary="+writer.Boundary())
+	resp := httptest.NewRecorder()
+	s.ServeHTTP(resp, req)
+	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.Code)
+}
+
+func TestMaxMultipartSizeConfigurable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s := newServer(WithMaxMultipartSize(10 << 20))
+	body := new(bytes.Buffer)
+	writer := multipart.NewWriter(body)
+	_ = writer.WriteField("name", "hello")
+	writer.Close()
+	req, _ := http.NewRequest("POST", "/echo_multipart", body)
+	req.Header.Set("Content-Type", "multipart/form-data; boundary="+writer.Boundary())
+	resp := httptest.NewRecorder()
+	s.ServeHTTP(resp, req)
+	assert.Equal(t, http.StatusOK, resp.Code)
+}
+
+func TestMultipartNilBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s := newServer()
+	req, _ := http.NewRequest("POST", "/echo", nil)
+	req.Header.Set("Content-Type", "multipart/form-data; boundary=abc")
+	resp := httptest.NewRecorder()
+	assert.NotPanics(t, func() {
+		s.ServeHTTP(resp, req)
+	})
+	assert.Equal(t, http.StatusOK, resp.Code)
+}

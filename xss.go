@@ -34,6 +34,24 @@ const (
 
 var errBodyTooLarge = errors.New("request body too large")
 
+type countingReader struct {
+	r     io.Reader
+	n     int64
+	limit int64
+}
+
+func (cr *countingReader) Read(p []byte) (int, error) {
+	if cr.n > cr.limit {
+		return 0, errBodyTooLarge
+	}
+	n, err := cr.r.Read(p)
+	cr.n += int64(n)
+	if cr.n > cr.limit {
+		return n, errBodyTooLarge
+	}
+	return n, err
+}
+
 // Option configures the XSS middleware.
 type Option func(*config)
 
@@ -240,6 +258,9 @@ func handleForm(c *gin.Context, p *bluemonday.Policy, skip map[string]bool, maxB
 }
 
 func handleMultipart(c *gin.Context, p *bluemonday.Policy, skip map[string]bool, maxMultipartSize int64) error {
+	if c.Request.Body == nil {
+		return nil
+	}
 	ctHdr := c.Request.Header.Get("Content-Type")
 	_, params, err := mime.ParseMediaType(ctHdr)
 	if err != nil || params["boundary"] == "" {
@@ -247,7 +268,9 @@ func handleMultipart(c *gin.Context, p *bluemonday.Policy, skip map[string]bool,
 	}
 	boundary := params["boundary"]
 
-	mr := multipart.NewReader(c.Request.Body, boundary)
+	limited := io.LimitReader(c.Request.Body, maxMultipartSize+1)
+	cr := &countingReader{r: limited, limit: maxMultipartSize}
+	mr := multipart.NewReader(cr, boundary)
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	if err := mw.SetBoundary(boundary); err != nil {

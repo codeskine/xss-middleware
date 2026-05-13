@@ -4,166 +4,26 @@
 
 package xss
 
-// see https://raw.githubusercontent.com/gin-gonic/contrib/master/secure/secure_test.go
-
 import (
+	"bytes"
+	"encoding/json"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-
-	"github.com/gin-gonic/gin"
-
-	//"reflect"
-	"bytes"
-	"io"
-
-	"encoding/json"
-	"fmt"
-	"log"
-	"net/url"
-	"os"
-	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 )
 
-type User struct {
-	Id       int     `json:"id" form:"id" binding:"required"`
-	Flt      float64 `json:"flt" form:"flt"`
-	User     string  `json:"user" form:"user"`
-	Email    string  `json:"email" form:"email"`
-	Password string  `json:"password" form:"password"`
-	CreAt    int64   `json:"cre_at" form:"cre_at"`
-	Comment  string  `json:"comment" form:"comment"`
-}
-
-type Users struct {
-	Id    int    `json:"id" form:"id" binding:"required"`
-	Users []User `json:"users"`
-}
-
-type UserExtended struct {
-	Id       int      `json:"id" form:"id" binding:"required"`
-	Flt      float64  `json:"flt" form:"flt"`
-	User     string   `json:"user" form:"user"`
-	Email    string   `json:"email" form:"email"`
-	Password string   `json:"password" form:"password"`
-	CreAt    int64    `json:"cre_at" form:"cre_at"`
-	Comment  string   `json:"comment" form:"comment"`
-	Users    []User   `json:"users"`
-	Ids      []string `json:"ids"`
-}
-
-// Test as Gin Middleware
-func newServer(xssMdlwr XssMw) *gin.Engine {
-
-	r := gin.Default()
-
-	r.Use(xssMdlwr.RemoveXss())
-	// TODO - filter on Response not Request
-	//r.Use(xss.FilterXss())
-
-	r.GET("/user/:id", func(c *gin.Context) {
-		c.String(200, fmt.Sprintf("%v", c.Request.Body))
-	})
-
-	r.GET("/user", func(c *gin.Context) {
-		var id = c.DefaultQuery("id", "")
-		var userName = c.DefaultQuery("name", "")
-		var email = c.DefaultQuery("email", "")
-		c.JSON(201, gin.H{
-			"id":    id,
-			"name":  userName,
-			"email": email,
-		})
-	})
-
-	r.PUT("/user", func(c *gin.Context) {
-		//fmt.Println(c.Request.Body)
-		var user User
-		//fmt.Printf("%#v", user)
-		err := c.Bind(&user)
-		//fmt.Printf("%#v", user)
-		if err != nil {
-			//fmt.Println(err)
-			c.JSON(404, gin.H{"msg": "Bind Failed."})
-			return
-		}
-		c.JSON(200, user)
-	})
-
-	r.POST("/user", func(c *gin.Context) {
-		//fmt.Println(c.Request.Body)
-		//fmt.Println(c.Header.Get("Content-Length"))
-		var user User
-		//fmt.Printf("%#v", user)
-		err := c.Bind(&user)
-		//fmt.Printf("%#v", user)
-		if err != nil {
-			//fmt.Println(err)
-			c.JSON(404, gin.H{"msg": "Bind Failed."})
-			return
-		}
-		c.JSON(201, user)
-	})
-
-	r.POST("/user_post", func(c *gin.Context) {
-		id, _ := strconv.Atoi(c.PostForm("id"))
-		user := c.PostForm("user")
-		flt, _ := strconv.ParseFloat(c.PostForm("flt"), 64)
-		email := c.PostForm("email")
-		password := c.PostForm("password")
-		comment := c.PostForm("comment")
-		cre_at, _ := strconv.ParseInt(c.PostForm("cre_at"), 10, 64)
-
-		usr := User{
-			Id:       id,
-			User:     user,
-			Flt:      flt,
-			Email:    email,
-			Password: password,
-			Comment:  comment,
-			CreAt:    cre_at,
-		}
-		c.JSON(200, usr)
-	})
-
-	r.POST("/user_extended", func(c *gin.Context) {
-		var userExtnd UserExtended
-		// fmt.Printf("%#v", userExtnd)
-		err := c.Bind(&userExtnd)
-		if err != nil {
-			//fmt.Println(err)
-			c.JSON(404, gin.H{"msg": "Bind Failed."})
-			return
-		}
-		c.JSON(201, userExtnd)
-	})
-
-	// nested JSON
-	r.POST("/user_post_nested_json", func(c *gin.Context) {
-		var users Users
-		// fmt.Printf("%#v", users)
-		err := c.Bind(&users)
-		if err != nil {
-			//fmt.Println(err)
-			c.JSON(404, gin.H{"msg": "Bind Failed."})
-			return
-		}
-		c.JSON(201, users)
-	})
-
-	return r
-}
-
-func newServerNew(opts ...Option) *gin.Engine {
+// newServer builds a test Gin engine using the new New() middleware.
+func newServer(opts ...Option) *gin.Engine {
 	r := gin.Default()
 	r.Use(New(opts...))
 
 	r.GET("/user/:id", func(c *gin.Context) {
-		c.String(200, fmt.Sprintf("%v", c.Request.Body))
+		c.String(200, "%v", c.Request.Body)
 	})
 
 	r.GET("/user", func(c *gin.Context) {
@@ -179,7 +39,15 @@ func newServerNew(opts ...Option) *gin.Engine {
 	})
 
 	r.PUT("/user", func(c *gin.Context) {
-		var user User
+		var user struct {
+			Id       int     `json:"id" form:"id" binding:"required"`
+			Flt      float64 `json:"flt" form:"flt"`
+			User     string  `json:"user" form:"user"`
+			Email    string  `json:"email" form:"email"`
+			Password string  `json:"password" form:"password"`
+			CreAt    int64   `json:"cre_at" form:"cre_at"`
+			Comment  string  `json:"comment" form:"comment"`
+		}
 		if err := c.Bind(&user); err != nil {
 			c.JSON(404, gin.H{"msg": "Bind Failed."})
 			return
@@ -188,7 +56,15 @@ func newServerNew(opts ...Option) *gin.Engine {
 	})
 
 	r.POST("/user", func(c *gin.Context) {
-		var user User
+		var user struct {
+			Id       int     `json:"id" form:"id" binding:"required"`
+			Flt      float64 `json:"flt" form:"flt"`
+			User     string  `json:"user" form:"user"`
+			Email    string  `json:"email" form:"email"`
+			Password string  `json:"password" form:"password"`
+			CreAt    int64   `json:"cre_at" form:"cre_at"`
+			Comment  string  `json:"comment" form:"comment"`
+		}
 		if err := c.Bind(&user); err != nil {
 			c.JSON(404, gin.H{"msg": "Bind Failed."})
 			return
@@ -197,18 +73,42 @@ func newServerNew(opts ...Option) *gin.Engine {
 	})
 
 	r.POST("/user_post", func(c *gin.Context) {
-		id, _ := strconv.Atoi(c.PostForm("id"))
-		flt, _ := strconv.ParseFloat(c.PostForm("flt"), 64)
-		creAt, _ := strconv.ParseInt(c.PostForm("cre_at"), 10, 64)
-		c.JSON(200, User{
-			Id: id, User: c.PostForm("user"), Flt: flt,
-			Email: c.PostForm("email"), Password: c.PostForm("password"),
-			Comment: c.PostForm("comment"), CreAt: creAt,
-		})
+		var user struct {
+			Id       int     `json:"id" form:"id" binding:"required"`
+			Flt      float64 `json:"flt" form:"flt"`
+			User     string  `json:"user" form:"user"`
+			Email    string  `json:"email" form:"email"`
+			Password string  `json:"password" form:"password"`
+			CreAt    int64   `json:"cre_at" form:"cre_at"`
+			Comment  string  `json:"comment" form:"comment"`
+		}
+		if err := c.Bind(&user); err != nil {
+			c.JSON(404, gin.H{"msg": "Bind Failed."})
+			return
+		}
+		c.JSON(200, user)
 	})
 
 	r.POST("/user_extended", func(c *gin.Context) {
-		var u UserExtended
+		var u struct {
+			Id       int     `json:"id" form:"id" binding:"required"`
+			Flt      float64 `json:"flt" form:"flt"`
+			User     string  `json:"user" form:"user"`
+			Email    string  `json:"email" form:"email"`
+			Password string  `json:"password" form:"password"`
+			CreAt    int64   `json:"cre_at" form:"cre_at"`
+			Comment  string  `json:"comment" form:"comment"`
+			Users    []struct {
+				Id       int     `json:"id" form:"id"`
+				Flt      float64 `json:"flt" form:"flt"`
+				User     string  `json:"user" form:"user"`
+				Email    string  `json:"email" form:"email"`
+				Password string  `json:"password" form:"password"`
+				CreAt    int64   `json:"cre_at" form:"cre_at"`
+				Comment  string  `json:"comment" form:"comment"`
+			} `json:"users"`
+			Ids []string `json:"ids"`
+		}
 		if err := c.Bind(&u); err != nil {
 			c.JSON(404, gin.H{"msg": "Bind Failed."})
 			return
@@ -217,7 +117,18 @@ func newServerNew(opts ...Option) *gin.Engine {
 	})
 
 	r.POST("/user_post_nested_json", func(c *gin.Context) {
-		var users Users
+		var users struct {
+			Id    int `json:"id" form:"id" binding:"required"`
+			Users []struct {
+				Id       int     `json:"id"`
+				Flt      float64 `json:"flt"`
+				User     string  `json:"user"`
+				Email    string  `json:"email"`
+				Password string  `json:"password"`
+				CreAt    int64   `json:"cre_at"`
+				Comment  string  `json:"comment"`
+			} `json:"users"`
+		}
 		if err := c.Bind(&users); err != nil {
 			c.JSON(404, gin.H{"msg": "Bind Failed."})
 			return
@@ -227,8 +138,8 @@ func newServerNew(opts ...Option) *gin.Engine {
 
 	// echo routes for regression tests
 	r.POST("/echo", func(c *gin.Context) {
-		body, _ := io.ReadAll(c.Request.Body)
-		c.Data(200, "application/json", body)
+		b, _ := readAll(c)
+		c.Data(200, "application/json", b)
 	})
 
 	r.POST("/echo_form", func(c *gin.Context) {
@@ -252,669 +163,22 @@ func newServerNew(opts ...Option) *gin.Engine {
 	return r
 }
 
-func TestKeepsValuesStripsHtmlOnGet(t *testing.T) {
-	// don't want to see log message while running tests
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(os.Stderr)
-
-	var xssMdlwr XssMw
-	s := newServer(xssMdlwr)
-
-	id := "2"
-	name := "<img src=x onerror=alert(0)>"
-	email := "testUser@example.com<html>"
-
-	var queryParams = url.Values{}
-	queryParams.Set("id", id)
-	queryParams.Set("name", name)
-	queryParams.Set("email", email)
-
-	req, _ := http.NewRequest("GET", "/user?"+queryParams.Encode(), nil)
-	resp := httptest.NewRecorder()
-	s.ServeHTTP(resp, req)
-
-	assert.Equal(t, 201, resp.Code)
-	expStr := `{
-            "id":"%v",
-			"name":"%v",
-			"email": "%v"
-		}`
-
-	expect := fmt.Sprintf(expStr, id, "", "testUser@example.com")
-	assert.JSONEq(t, expect, resp.Body.String())
-}
-
-func TestKeepsValuesStripsHtmlWithSkipOnGet(t *testing.T) {
-	// don't want to see log message while running tests
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(os.Stderr)
-
-	var xssMdlwr XssMw
-	xssMdlwr.FieldsToSkip = []string{"id"}
-	s := newServer(xssMdlwr)
-
-	id := "2<img src=x onerror=alert(0)>"
-	name := "<img src=x onerror=alert(0)>"
-	email := "testUser@example.com<html>"
-
-	var queryParams = url.Values{}
-	queryParams.Set("id", id)
-	queryParams.Set("name", name)
-	queryParams.Set("email", email)
-
-	req, _ := http.NewRequest("GET", "/user?"+queryParams.Encode(), nil)
-	resp := httptest.NewRecorder()
-	s.ServeHTTP(resp, req)
-
-	assert.Equal(t, 201, resp.Code)
-	expStr := `{
-            "id":"%v",
-			"name":"%v",
-			"email": "%v"
-		}`
-
-	expect := fmt.Sprintf(expStr, id, "", "testUser@example.com")
-	assert.JSONEq(t, expect, resp.Body.String())
-}
-
-func TestKeepsValuesStripsHtmlOnPost(t *testing.T) {
-	// don't want to see log message while running tests
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(os.Stderr)
-
-	var xssMdlwr XssMw
-	s := newServer(xssMdlwr)
-
-	user := "TestUser"
-	email := "testUser@example.com"
-	password := "!@$%^ASDF<html>"
-	cmnt := `<img src=x onerror=alert(0)>`
-	cre_at := "1481017167"
-	oParams := `{"id":2, "flt":2.345, "user":"` + user + `", "email": "` + email + `", "password":"` + password + `", "comment":"` + cmnt + `", "cre_at":` + cre_at + `}`
-	req, _ := http.NewRequest("POST", "/user", bytes.NewBufferString(oParams))
-	req.Header.Add("Content-Type", "application/json")
-	req.Header.Add("Content-Length", strconv.Itoa(len(oParams)))
-
-	resp := httptest.NewRecorder()
-	s.ServeHTTP(resp, req)
-
-	assert.Equal(t, 201, resp.Code)
-	expStr := `{
-            "id":2,
-            "flt":2.345,
-            "user":"%v",
-            "email":"%v",
-            "password":"%v",
-            "comment":"%v",
-            "cre_at":%v
-        }`
-
-	cmnt_clnd := `` // malicious markup content stripped
-
-	expect := fmt.Sprintf(expStr, user, email, password, cmnt_clnd, cre_at)
-	assert.JSONEq(t, expect, resp.Body.String())
-}
-
-func TestSupportsList(t *testing.T) {
-	// don't want to see log message while running tests
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(os.Stderr)
-
-	var xssMdlwr XssMw
-	s := newServer(xssMdlwr)
-
-	user := "TestUser"
-	email := "testUser@example.com"
-	password := "!@$%^ASDF<html>"
-	cmnt := `<img src=x onerror=alert(0)>`
-	cre_at := "1481017167"
-	userA := `{"id":1,  "flt":1.345, "user":"` + user + `", "email": "` + email + `", "password":"` + password + `", "comment":"` + cmnt + `", "cre_at":` + cre_at + `}`
-	oParams := `{"id":1,  "flt":2.345, "user":"` + user + `", "email": "` + email + `", "password":"` + password + `", "comment":"` + cmnt + `", "cre_at":` + cre_at + `, "users": [ ` + userA + `], "ids": ["4.4563", "Bill", "8", "14", "900001"] }`
-	req, _ := http.NewRequest("POST", "/user_extended", bytes.NewBufferString(oParams))
-	req.Header.Add("Content-Type", "application/json")
-	req.Header.Add("Content-Length", strconv.Itoa(len(oParams)))
-
-	resp := httptest.NewRecorder()
-	s.ServeHTTP(resp, req)
-
-	assert.Equal(t, 201, resp.Code)
-	expStr := `{
-            "id":1,
-			"flt":2.345,
-			"user":"%v",
-			"email":"%v",
-			"password":"%v",
-			"comment":"%v",
-			"cre_at":%v,
-			"users":[
-			  {"id":1, "flt":1.345, "user":"%v", "email":"%v", "password":"%v", "comment":"%v", "cre_at":%v}
-			 ],
-			"ids": ["4.4563","Bill","8","14","900001"]
-        }`
-
-	cmnt_clnd := `` // malicious markup content stripped
-	expect := fmt.Sprintf(expStr, user, email, password, cmnt_clnd, cre_at, user, email, password, cmnt_clnd, cre_at)
-	//fmt.Println(expect)
-
-	//fmt.Println(resp.Body.String())
-	assert.JSONEq(t, expect, resp.Body.String())
-}
-
-func TestSupportNestedJSONPost(t *testing.T) {
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(os.Stderr)
-
-	var xssMdlwr XssMw
-	s := newServer(xssMdlwr)
-
-	user1 := "TestUser1"
-	email1 := "testUser1@example.com"
-	password1 := "!@$%^ASDF<html>1"
-	cmnt := `<img src=x onerror=alert(0)>`
-	cre_at := "1481017167"
-	userA := `{"id":1,  "flt":1.345, "user":"` + user1 + `", "email": "` + email1 + `", "password":"` + password1 + `", "comment":"` + cmnt + `", "cre_at":` + cre_at + `}`
-
-	user2 := "TestUser2"
-	email2 := "testUser2@example.com"
-	password2 := "!@$%^ASDF<html>2"
-	userB := `{"id":2,  "flt":2.345, "user":"` + user2 + `", "email": "` + email2 + `", "password":"` + password2 + `", "comment":"` + cmnt + `", "cre_at":` + cre_at + `}`
-
-	oParams := `{"id":1, "users": [ ` + userA + `,` + userB + `]}`
-	// YES Can Parse This
-	//oParams = `{
-	//"id": "0001",
-	//"type": "donut",
-	//"name": "Cake",
-	//"ppu": 0.55,
-	//"batters":
-	//	{
-	//		"batter":
-	//			[
-	//				{ "id": "1001", "type": "Regular" },
-	//				{ "id": "1002", "type": "Chocolate" },
-	//				{ "id": "1003", "type": "Blueberry" },
-	//				{ "id": "1004", "type": "Devil's Food" }
-	//			]
-	//	},
-	//"topping":
-	//	[
-	//		{ "id": "5001", "type": "None" },
-	//		{ "id": "5002", "type": "Glazed" },
-	//		{ "id": "5005", "type": "Sugar" },
-	//		{ "id": "5007", "type": "Powdered Sugar" },
-	//		{ "id": "5006", "type": "Chocolate with Sprinkles" },
-	//		{ "id": "5003", "type": "Chocolate" },
-	//		{ "id": "5004", "type": "Maple" }
-	//	]
-	//}`
-	// YES - Parses correctly
-	//oParams = `[
-	//{
-	//	"id": "0001",
-	//	"type": "donut",
-	//	"name": "Cake",
-	//	"ppu": 0.55,
-	//	"batters":
-	//		{
-	//			"batter":
-	//				[
-	//					{ "id": "1001", "type": "Regular" },
-	//					{ "id": "1002", "type": "Chocolate" },
-	//					{ "id": "1003", "type": "Blueberry" },
-	//					{ "id": "1004", "type": "Devil's Food" }
-	//				]
-	//		},
-	//	"topping":
-	//		[
-	//			{ "id": "5001", "type": "None" },
-	//			{ "id": "5002", "type": "Glazed" },
-	//			{ "id": "5005", "type": "Sugar" },
-	//			{ "id": "5007", "type": "Powdered Sugar" },
-	//			{ "id": "5006", "type": "Chocolate with Sprinkles" },
-	//			{ "id": "5003", "type": "Chocolate" },
-	//			{ "id": "5004", "type": "Maple" }
-	//		]
-	//},
-	//{
-	//	"id": "0002",
-	//	"type": "donut",
-	//	"name": "Raised",
-	//	"ppu": 0.55,
-	//	"batters":
-	//		{
-	//			"batter":
-	//				[
-	//					{ "id": "1001", "type": "Regular" }
-	//				]
-	//		},
-	//	"topping":
-	//		[
-	//			{ "id": "5001", "type": "None" },
-	//			{ "id": "5002", "type": "Glazed" },
-	//			{ "id": "5005", "type": "Sugar" },
-	//			{ "id": "5003", "type": "Chocolate" },
-	//			{ "id": "5004", "type": "Maple" }
-	//		]
-	//},
-	//{
-	//	"id": "0003",
-	//	"type": "donut",
-	//	"name": "Old Fashioned",
-	//	"ppu": 0.55,
-	//	"batters":
-	//		{
-	//			"batter":
-	//				[
-	//					{ "id": "1001", "type": "Regular" },
-	//					{ "id": "1002", "type": "Chocolate" }
-	//				]
-	//		},
-	//	"topping":
-	//		[
-	//			{ "id": "5001", "type": "None" },
-	//			{ "id": "5002", "type": "Glazed" },
-	//			{ "id": "5003", "type": "Chocolate" },
-	//			{ "id": "5004", "type": "Maple" }
-	//		]
-	//}
-	//]`
-	//oParams = `{"comment": "test", "id": 0, "media_id": 381, "parent_id": 0, "status": null, "updated_at": 1540673110}`
-
-	req, _ := http.NewRequest("POST", "/user_post_nested_json", bytes.NewBufferString(oParams))
-	req.Header.Add("Content-Type", "application/json")
-	req.Header.Add("Content-Length", strconv.Itoa(len(oParams)))
-
-	resp := httptest.NewRecorder()
-	s.ServeHTTP(resp, req)
-
-	assert.Equal(t, 201, resp.Code)
-	expStr := `{
-            "id":1,
-			"users":[
-			  {"id":1, "flt":1.345, "user":"%v", "email":"%v", "password":"%v", "comment":"%v", "cre_at":%v},
-              {"id":2, "flt":2.345, "user":"%v", "email":"%v", "password":"%v", "comment":"%v", "cre_at":%v}
-			]
-        }`
-
-	cmnt_clnd := `` // malicious markup content stripped
-	expect := fmt.Sprintf(expStr, user1, email1, password1, cmnt_clnd, cre_at, user2, email2, password2, cmnt_clnd, cre_at)
-	//fmt.Println(expect)
-
-	//fmt.Println(resp.Body.String())
-	assert.JSONEq(t, expect, resp.Body.String())
-}
-
-func TestKeepsValuesStripsHtmlOnPut(t *testing.T) {
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(os.Stderr)
-
-	var xssMdlwr XssMw
-	s := newServer(xssMdlwr)
-
-	user := "TestUser"
-	email := "testUser@example.com"
-	password := "!@$%^ASDF<html>"
-	cmnt := `>'>\"><img src=x onerror=alert(0)>`
-	cre_at := "1481017167"
-	oParams := `{"id":2, "flt":2.345, "user":"` + user + `", "email": "` + email + `", "password":"` + password + `", "comment":"` + cmnt + `", "cre_at":` + cre_at + `}`
-	req, _ := http.NewRequest("PUT", "/user", bytes.NewBufferString(oParams))
-	req.Header.Add("Content-Type", "application/json")
-	req.Header.Add("Content-Length", strconv.Itoa(len(oParams)))
-
-	resp := httptest.NewRecorder()
-	s.ServeHTTP(resp, req)
-
-	assert.Equal(t, 200, resp.Code)
-	expStr := `{
-            "id":2,
-            "flt":2.345,
-            "user":"%v",
-            "email":"%v",
-            "password":"%v",
-            "comment":"%v",
-            "cre_at":%v
-        }`
-	cmnt_clnd := `&gt;&#39;&gt;&#34;&gt;` //i.e. >'>">
-
-	expect := fmt.Sprintf(expStr, user, email, password, cmnt_clnd, cre_at)
-	assert.JSONEq(t, expect, resp.Body.String())
-}
-
-func TestXssSkippedOnNoContentLength(t *testing.T) {
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(os.Stderr)
-
-	var xssMdlwr XssMw
-	s := newServer(xssMdlwr)
-
-	user := "TestUser"
-	email := "testUser@example.com"
-	password := "!@$%^ASDF<html>"
-	cmnt := `<img src=x onerror=alert(0)>`
-	cre_at := "1481017167"
-	oParams := `{"id":2, "flt":2.345, "user":"` + user + `", "email": "` + email + `", "password":"` + password + `", "comment":"` + cmnt + `", "cre_at":` + cre_at + `}`
-	req, _ := http.NewRequest("POST", "/user", bytes.NewBufferString(oParams))
-	req.Header.Add("Content-Type", "application/json")
-
-	resp := httptest.NewRecorder()
-	s.ServeHTTP(resp, req)
-
-	assert.Equal(t, 201, resp.Code)
-	expStr := `{
-            "id":2,
-            "flt":2.345,
-            "user":"%v",
-            "email":"%v",
-            "password":"%v",
-            "comment":"%v",
-            "cre_at":%v
-        }`
-
-	expect := fmt.Sprintf(expStr, user, email, password, cmnt, cre_at)
-	assert.JSONEq(t, expect, resp.Body.String())
-}
-
-func TestXssSkippedOnGetRequest(t *testing.T) {
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(os.Stderr)
-
-	var xssMdlwr XssMw
-	s := newServer(xssMdlwr)
-
-	cmnt := `<img src=x onerror=alert(0)>`
-	oParams := `{"id":2, "comment":"` + cmnt + `"}`
-
-	req, _ := http.NewRequest("GET", "/user/2", bytes.NewBufferString(oParams))
-	req.Header.Add("Content-Type", "application/json")
-	req.Header.Add("Content-Length", strconv.Itoa(len(oParams)))
-
-	resp := httptest.NewRecorder()
-	s.ServeHTTP(resp, req)
-
-	assert.Equal(t, 200, resp.Code)
-	assert.Equal(t, `{{"id":2, "comment":"`+cmnt+`"}}`, resp.Body.String())
-}
-
-// TODO - conf feature pass in fields to skip
-func TestPasswordIsNotFiltered(t *testing.T) {
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(os.Stderr)
-
-	var xssMdlwr XssMw
-	s := newServer(xssMdlwr)
-
-	user := "TestUser"
-	email := "testUser@example.com"
-	password := "<>!@$%^ASDF<>" // the 'password' keyword is set to not filter out xss
-	cmnt := `<script>alert(0)</script>`
-	cre_at := "1481017167"
-	oParams := `{"id":2, "flt":2.345, "user":"` + user + `", "email": "` + email + `", "password":"` + password + `", "comment":"` + cmnt + `", "cre_at":` + cre_at + `}`
-	req, _ := http.NewRequest("POST", "/user", bytes.NewBufferString(oParams))
-	req.Header.Add("Content-Type", "application/json")
-	req.Header.Add("Content-Length", strconv.Itoa(len(oParams)))
-
-	resp := httptest.NewRecorder()
-	s.ServeHTTP(resp, req)
-
-	assert.Equal(t, 201, resp.Code)
-	expStr := `{
-            "id":2,
-            "flt":2.345,
-            "user":"%v",
-            "email":"%v",
-            "password":"%v",
-            "comment":"%v",
-            "cre_at":%v
-        }`
-
-	cmnt_clnd := `` // malicious markup content stripped
-
-	expect := fmt.Sprintf(expStr, user, email, password, cmnt_clnd, cre_at)
-	assert.JSONEq(t, expect, resp.Body.String())
-}
-
-// multipart form posts really need to be filtered!
-// TODO careful with content body such as files, images, audio files, etc!
-// Content-Disposition: form-data; name="comment"
-// >'>\"><img src=x onerror=alert(0)>
-func TestXssFiltersMultiPartFormData(t *testing.T) {
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(os.Stderr)
-
-	var xssMdlwr XssMw
-	//xssMdlwr = XssMw{
-	//	FieldsToSkip: []string{"password"},
-	//	BmPolicy:     "UGCPolicy",
-	//}
-	s := newServer(xssMdlwr)
-
-	user := "TestUser"
-	email := "testUser@example.com"
-	password := "!@$%^ASDF<html>"
-	cmnt := `>'>\"><img src=x onerror=alert(0)>`
-	cre_at := "1481017167"
-
-	Oparams := map[string]string{
-		"id":       "2",
-		"user":     user,
-		"flt":      "2.345",
-		"email":    email,
-		"password": password,
-		"comment":  cmnt,
-		"cre_at":   cre_at,
+// readAll is a helper used by the /echo route.
+func readAll(c *gin.Context) ([]byte, error) {
+	if c.Request.Body == nil {
+		return []byte("null"), nil
 	}
-
-	body := new(bytes.Buffer)
-	writer := multipart.NewWriter(body)
-	for key, val := range Oparams {
-		_ = writer.WriteField(key, val)
-	}
-	err := writer.Close()
-	assert.Nil(t, err)
-
-	boundary := writer.Boundary()
-	close_buf := bytes.NewBufferString(fmt.Sprintf("\r\n--%s--\r\n", boundary))
-
-	req, perr := http.NewRequest("POST", "/user", body)
-	assert.Nil(t, perr)
-	// Set headers for multipart, and Content Length
-	req.Header.Add("Content-Type", "multipart/form-data; boundary="+boundary)
-	req.ContentLength = int64(body.Len()) + int64(close_buf.Len())
-
-	resp := httptest.NewRecorder()
-	s.ServeHTTP(resp, req)
-	//fmt.Println(resp.Body.String())
-	assert.Equal(t, 201, resp.Code)
-	expStr := `{
-            "id":2,
-            "flt":2.345,
-            "user":"%v",
-            "email":"%v",
-            "password":"%v",
-            "comment":"%v",
-            "cre_at":%v
-        }`
-
-	//cmnt_clnd := `>'>\\\"><img src=x onerror=alert(0)>` // left intact
-	//cmnt_clnd := `&gt;&#39;&gt;&#34;&gt;` //i.e. >'>">
-	// XXX look at why the escape...
-	cmnt_clnd := `&gt;&#39;&gt;\\&#34;&gt;`
-
-	expect := fmt.Sprintf(expStr, user, email, password, cmnt_clnd, cre_at)
-	assert.JSONEq(t, expect, resp.Body.String())
+	buf := new(bytes.Buffer)
+	_, err := buf.ReadFrom(c.Request.Body)
+	return buf.Bytes(), err
 }
-
-// TODO
-// POST /post?id=1234&page=1 HTTP/1.1
-// Content-Type: application/x-www-form-urlencoded
-// name=manu&message=this_is_great
-// application/x-www-form-urlencoded
-func TestXssFiltersXFormEncoded(t *testing.T) {
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(os.Stderr)
-
-	//fmt.Println("TODO TestXssFiltersXFormEncoded")
-	//t.Skip()
-
-	var xssMdlwr XssMw
-	//xssMdlwr = XssMw{
-	//	FieldsToSkip: []string{"password"},
-	//	BmPolicy:     "UGCPolicy",
-	//}
-	s := newServer(xssMdlwr)
-
-	user := "TestUser"
-	email := "testUser@example.com"
-	password := "!@$%^ASDF<html>"
-	cmnt := `>'>\"><img src=x onerror=alert(0)>`
-	cre_at := "1481017167"
-
-	values := url.Values{}
-	values.Set("id", "2")
-	values.Add("user", user)
-	values.Add("flt", "2.345")
-	values.Add("email", email)
-	values.Add("password", password)
-	values.Add("comment", cmnt)
-	values.Add("cre_at", cre_at)
-
-	req, err := http.NewRequest(
-		"POST",
-		"/user_post",
-		strings.NewReader(values.Encode()),
-	)
-	assert.Nil(t, err)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp := httptest.NewRecorder()
-	s.ServeHTTP(resp, req)
-	//fmt.Println(resp.Body.String())
-	assert.Equal(t, 200, resp.Code)
-	expStr := `{
-            "id":2,
-            "flt":2.345,
-            "user":"%v",
-            "email":"%v",
-            "password":"%v",
-            "comment":"%v",
-            "cre_at":%v
-        }`
-
-	//cmnt_clnd := `>'>\\\"><img src=x onerror=alert(0)>` // left intact
-	cmnt_clnd := `&gt;&#39;&gt;\\&#34;&gt;`
-
-	expect := fmt.Sprintf(expStr, user, email, password, cmnt_clnd, cre_at)
-	assert.JSONEq(t, expect, resp.Body.String())
-}
-
-// TODO - prove Headers and Other Request fields left intact
-// Prove Headers left untouched
-// for example
-//
-//	req.Header.Add("Authorization", "Bearer "+authToken)
-func TestKeepsHeadersIntact(t *testing.T) {
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(os.Stderr)
-
-	fmt.Println("TODO TestKeepsHeadersIntact")
-	t.Skip()
-
-	//// we don't want to see log message while running tests
-	//log.SetOutput(ioutil.Discard)
-	//defer log.SetOutput(os.Stderr)
-
-	var xssMdlwr XssMw
-	//xssMdlwr = XssMw{
-	//	FieldsToSkip: []string{"password"},
-	//	BmPolicy:     "UGCPolicy",
-	//}
-	s := newServer(xssMdlwr)
-
-	user := "TestUser"
-	email := "testUser@example.com"
-	password := "!@$%^ASDF<html>"
-	cmnt := `<img src=x onerror=alert(0)>`
-	cre_at := "1481017167"
-	oParams := `{"id":2, "flt":2.345, "user":"` + user + `", "email": "` + email + `", "password":"` + password + `", "comment":"` + cmnt + `", "cre_at":` + cre_at + `}`
-	req, _ := http.NewRequest("POST", "/user", bytes.NewBufferString(oParams))
-	req.Header.Add("Content-Type", "application/json")
-	req.Header.Add("Content-Length", strconv.Itoa(len(oParams)))
-	//req.Header.Add("Authorization", "Bearer "+authToken)
-
-	resp := httptest.NewRecorder()
-	s.ServeHTTP(resp, req)
-
-	assert.Equal(t, 201, resp.Code)
-	expStr := `{
-            "id":2,
-            "flt":2.345,
-            "user":"%v",
-            "email":"%v",
-            "password":"%v",
-            "comment":"%v",
-            "cre_at":%v
-        }`
-
-	cmnt_clnd := `` // malicious markup content stripped
-
-	expect := fmt.Sprintf(expStr, user, email, password, cmnt_clnd, cre_at)
-	assert.JSONEq(t, expect, resp.Body.String())
-}
-
-func TestUGCPolityAllowSomeHTMLOnPost(t *testing.T) {
-	// don't want to see log message while running tests
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(os.Stderr)
-
-	var xssMdlwr = XssMw{
-		//TableWhitelist: []byte,
-		//FieldWhitelist []byte,
-		//TableFieldWhitelist []byte,
-		//FieldsToSkip: []string{"password"},
-		BmPolicy: "UGCPolicy",
-	}
-	s := newServer(xssMdlwr)
-
-	user := "TestUser"
-	email := "testUser@example.com"
-	password := "!@$%^ASDF<html>"
-	cmnt := `<img src=x onerror=alert(0)>`
-	cre_at := "1481017167"
-	oParams := `{"id":2, "flt":2.345, "user":"` + user + `", "email": "` + email + `", "password":"` + password + `", "comment":"` + cmnt + `", "cre_at":` + cre_at + `}`
-	req, _ := http.NewRequest("POST", "/user", bytes.NewBufferString(oParams))
-	req.Header.Add("Content-Type", "application/json")
-	req.Header.Add("Content-Length", strconv.Itoa(len(oParams)))
-
-	resp := httptest.NewRecorder()
-	s.ServeHTTP(resp, req)
-
-	assert.Equal(t, 201, resp.Code)
-	expStr := `{
-            "id":2,
-            "flt":2.345,
-            "user":"%v",
-            "email":"%v",
-            "password":"%v",
-            "comment":"%v",
-            "cre_at":%v
-        }`
-
-	cmnt_clnd := `<img src=\"x\">` // malicious markup content stripped, valid html left
-
-	expect := fmt.Sprintf(expStr, user, email, password, cmnt_clnd, cre_at)
-	assert.JSONEq(t, expect, resp.Body.String())
-}
-
-// TODO
-// prove the 3 types of filtering
 
 // --- Regression tests for bugs fixed in the rewrite ---
 
 // Bug #2: empty JSON object produced invalid output ("}")
 func TestRegressionEmptyJsonObject(t *testing.T) {
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(os.Stderr)
-	s := newServerNew()
+	gin.SetMode(gin.TestMode)
+	s := newServer()
 	req, _ := http.NewRequest("POST", "/echo", strings.NewReader(`{}`))
 	req.Header.Set("Content-Type", "application/json")
 	resp := httptest.NewRecorder()
@@ -925,9 +189,8 @@ func TestRegressionEmptyJsonObject(t *testing.T) {
 
 // Bug #2: empty JSON array produced invalid output ("]")
 func TestRegressionEmptyJsonArray(t *testing.T) {
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(os.Stderr)
-	s := newServerNew()
+	gin.SetMode(gin.TestMode)
+	s := newServer()
 	req, _ := http.NewRequest("POST", "/echo", strings.NewReader(`[]`))
 	req.Header.Set("Content-Type", "application/json")
 	resp := httptest.NewRecorder()
@@ -938,9 +201,8 @@ func TestRegressionEmptyJsonArray(t *testing.T) {
 
 // Bug #1: panic on top-level scalar array due to unchecked type assertion
 func TestRegressionScalarArrayNoPanic(t *testing.T) {
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(os.Stderr)
-	s := newServerNew()
+	gin.SetMode(gin.TestMode)
+	s := newServer()
 	req, _ := http.NewRequest("POST", "/echo", strings.NewReader(`[1, "a<script>alert(0)</script>", true]`))
 	req.Header.Set("Content-Type", "application/json")
 	resp := httptest.NewRecorder()
@@ -951,9 +213,8 @@ func TestRegressionScalarArrayNoPanic(t *testing.T) {
 
 // Bug #5: JSON keys were not sanitized — XSS bypass via key name
 func TestRegressionJsonKeySanitized(t *testing.T) {
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(os.Stderr)
-	s := newServerNew()
+	gin.SetMode(gin.TestMode)
+	s := newServer()
 	req, _ := http.NewRequest("POST", "/echo", strings.NewReader(`{"<script>xss</script>":"value"}`))
 	req.Header.Set("Content-Type", "application/json")
 	resp := httptest.NewRecorder()
@@ -964,9 +225,8 @@ func TestRegressionJsonKeySanitized(t *testing.T) {
 
 // Bug #2 / correctness: null, bool, number values must pass through unchanged
 func TestRegressionJsonNullBoolPassthrough(t *testing.T) {
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(os.Stderr)
-	s := newServerNew()
+	gin.SetMode(gin.TestMode)
+	s := newServer()
 	req, _ := http.NewRequest("POST", "/echo", strings.NewReader(`{"flag":true,"nothing":null,"count":42}`))
 	req.Header.Set("Content-Type", "application/json")
 	resp := httptest.NewRecorder()
@@ -977,9 +237,8 @@ func TestRegressionJsonNullBoolPassthrough(t *testing.T) {
 
 // Bug #6: GET multi-value params — only last value was kept
 func TestRegressionGetMultiValueParams(t *testing.T) {
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(os.Stderr)
-	s := newServerNew()
+	gin.SetMode(gin.TestMode)
+	s := newServer()
 	req, _ := http.NewRequest("GET", "/echo_query?x=a&x=b", nil)
 	resp := httptest.NewRecorder()
 	s.ServeHTTP(resp, req)
@@ -991,9 +250,8 @@ func TestRegressionGetMultiValueParams(t *testing.T) {
 
 // Bug #7: form-encoded multi-value — only first value was kept
 func TestRegressionFormMultiValue(t *testing.T) {
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(os.Stderr)
-	s := newServerNew()
+	gin.SetMode(gin.TestMode)
+	s := newServer()
 	req, _ := http.NewRequest("POST", "/echo_form", strings.NewReader("x=a&x=b"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp := httptest.NewRecorder()
@@ -1006,9 +264,8 @@ func TestRegressionFormMultiValue(t *testing.T) {
 
 // Bug #4: multipart FieldsToSkip was silently ignored
 func TestRegressionMultipartSkipFields(t *testing.T) {
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(os.Stderr)
-	s := newServerNew(SkipFields("token"))
+	gin.SetMode(gin.TestMode)
+	s := newServer(SkipFields("token"))
 
 	body := new(bytes.Buffer)
 	writer := multipart.NewWriter(body)
@@ -1030,9 +287,8 @@ func TestRegressionMultipartSkipFields(t *testing.T) {
 
 // Bug #8: empty multipart field incorrectly aborted the request
 func TestRegressionMultipartEmptyField(t *testing.T) {
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(os.Stderr)
-	s := newServerNew()
+	gin.SetMode(gin.TestMode)
+	s := newServer()
 
 	body := new(bytes.Buffer)
 	writer := multipart.NewWriter(body)
@@ -1053,12 +309,10 @@ func TestRegressionMultipartEmptyField(t *testing.T) {
 }
 
 // Bug #4: multipart BmPolicy was silently ignored (hardcoded StrictPolicy)
-// NOTE: currently passes because handleMultipart is a stub (Task 5).
-// After Task 5, this must pass because UGC policy is actually applied to the img tag.
+// UGC policy keeps safe img tags.
 func TestRegressionMultipartUGCPolicy(t *testing.T) {
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(os.Stderr)
-	s := newServerNew(WithUGCPolicy())
+	gin.SetMode(gin.TestMode)
+	s := newServer(WithUGCPolicy())
 
 	body := new(bytes.Buffer)
 	writer := multipart.NewWriter(body)
@@ -1074,4 +328,20 @@ func TestRegressionMultipartUGCPolicy(t *testing.T) {
 	var result map[string]string
 	assert.NoError(t, json.Unmarshal(resp.Body.Bytes(), &result))
 	assert.Contains(t, result["comment"], "<img") // UGC policy keeps safe img tags
+}
+
+// New behavior: the new implementation always filters JSON, even without Content-Length.
+func TestXssFiltersWithoutContentLength(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := newServer()
+	payload := `{"name":"<script>alert(1)</script>"}`
+	req, _ := http.NewRequest("POST", "/echo", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	// No Content-Length header set — new implementation filters anyway
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+	var got map[string]string
+	json.Unmarshal(w.Body.Bytes(), &got)
+	assert.Equal(t, "", got["name"])
 }

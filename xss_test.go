@@ -17,7 +17,7 @@ import (
 	"bytes"
 	"io"
 
-	//"encoding/json"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/url"
@@ -153,6 +153,100 @@ func newServer(xssMdlwr XssMw) *gin.Engine {
 			return
 		}
 		c.JSON(201, users)
+	})
+
+	return r
+}
+
+func newServerNew(opts ...Option) *gin.Engine {
+	r := gin.Default()
+	r.Use(New(opts...))
+
+	r.GET("/user/:id", func(c *gin.Context) {
+		c.String(200, fmt.Sprintf("%v", c.Request.Body))
+	})
+
+	r.GET("/user", func(c *gin.Context) {
+		c.JSON(201, gin.H{
+			"id":    c.DefaultQuery("id", ""),
+			"name":  c.DefaultQuery("name", ""),
+			"email": c.DefaultQuery("email", ""),
+		})
+	})
+
+	r.GET("/echo_query", func(c *gin.Context) {
+		c.JSON(200, gin.H{"x": c.QueryArray("x")})
+	})
+
+	r.PUT("/user", func(c *gin.Context) {
+		var user User
+		if err := c.Bind(&user); err != nil {
+			c.JSON(404, gin.H{"msg": "Bind Failed."})
+			return
+		}
+		c.JSON(200, user)
+	})
+
+	r.POST("/user", func(c *gin.Context) {
+		var user User
+		if err := c.Bind(&user); err != nil {
+			c.JSON(404, gin.H{"msg": "Bind Failed."})
+			return
+		}
+		c.JSON(201, user)
+	})
+
+	r.POST("/user_post", func(c *gin.Context) {
+		id, _ := strconv.Atoi(c.PostForm("id"))
+		flt, _ := strconv.ParseFloat(c.PostForm("flt"), 64)
+		creAt, _ := strconv.ParseInt(c.PostForm("cre_at"), 10, 64)
+		c.JSON(200, User{
+			Id: id, User: c.PostForm("user"), Flt: flt,
+			Email: c.PostForm("email"), Password: c.PostForm("password"),
+			Comment: c.PostForm("comment"), CreAt: creAt,
+		})
+	})
+
+	r.POST("/user_extended", func(c *gin.Context) {
+		var u UserExtended
+		if err := c.Bind(&u); err != nil {
+			c.JSON(404, gin.H{"msg": "Bind Failed."})
+			return
+		}
+		c.JSON(201, u)
+	})
+
+	r.POST("/user_post_nested_json", func(c *gin.Context) {
+		var users Users
+		if err := c.Bind(&users); err != nil {
+			c.JSON(404, gin.H{"msg": "Bind Failed."})
+			return
+		}
+		c.JSON(201, users)
+	})
+
+	// echo routes for regression tests
+	r.POST("/echo", func(c *gin.Context) {
+		body, _ := io.ReadAll(c.Request.Body)
+		c.Data(200, "application/json", body)
+	})
+
+	r.POST("/echo_form", func(c *gin.Context) {
+		c.JSON(200, gin.H{"x": c.PostFormArray("x")})
+	})
+
+	r.POST("/echo_multipart", func(c *gin.Context) {
+		if err := c.Request.ParseMultipartForm(32 << 20); err != nil {
+			c.JSON(400, gin.H{"error": err.Error()})
+			return
+		}
+		result := map[string]string{}
+		for k, vals := range c.Request.MultipartForm.Value {
+			if len(vals) > 0 {
+				result[k] = vals[0]
+			}
+		}
+		c.JSON(200, result)
 	})
 
 	return r
@@ -813,3 +907,171 @@ func TestUGCPolityAllowSomeHTMLOnPost(t *testing.T) {
 
 // TODO
 // prove the 3 types of filtering
+
+// --- Regression tests for bugs fixed in the rewrite ---
+
+// Bug #2: empty JSON object produced invalid output ("}")
+func TestRegressionEmptyJsonObject(t *testing.T) {
+	log.SetOutput(io.Discard)
+	defer log.SetOutput(os.Stderr)
+	s := newServerNew()
+	req, _ := http.NewRequest("POST", "/echo", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	s.ServeHTTP(resp, req)
+	assert.Equal(t, 200, resp.Code)
+	assert.JSONEq(t, `{}`, resp.Body.String())
+}
+
+// Bug #2: empty JSON array produced invalid output ("]")
+func TestRegressionEmptyJsonArray(t *testing.T) {
+	log.SetOutput(io.Discard)
+	defer log.SetOutput(os.Stderr)
+	s := newServerNew()
+	req, _ := http.NewRequest("POST", "/echo", strings.NewReader(`[]`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	s.ServeHTTP(resp, req)
+	assert.Equal(t, 200, resp.Code)
+	assert.JSONEq(t, `[]`, resp.Body.String())
+}
+
+// Bug #1: panic on top-level scalar array due to unchecked type assertion
+func TestRegressionScalarArrayNoPanic(t *testing.T) {
+	log.SetOutput(io.Discard)
+	defer log.SetOutput(os.Stderr)
+	s := newServerNew()
+	req, _ := http.NewRequest("POST", "/echo", strings.NewReader(`[1, "a<script>alert(0)</script>", true]`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	s.ServeHTTP(resp, req)
+	assert.Equal(t, 200, resp.Code)
+	assert.JSONEq(t, `[1, "a", true]`, resp.Body.String())
+}
+
+// Bug #5: JSON keys were not sanitized — XSS bypass via key name
+func TestRegressionJsonKeySanitized(t *testing.T) {
+	log.SetOutput(io.Discard)
+	defer log.SetOutput(os.Stderr)
+	s := newServerNew()
+	req, _ := http.NewRequest("POST", "/echo", strings.NewReader(`{"<script>xss</script>":"value"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	s.ServeHTTP(resp, req)
+	assert.Equal(t, 200, resp.Code)
+	assert.NotContains(t, resp.Body.String(), "<script>")
+}
+
+// Bug #2 / correctness: null, bool, number values must pass through unchanged
+func TestRegressionJsonNullBoolPassthrough(t *testing.T) {
+	log.SetOutput(io.Discard)
+	defer log.SetOutput(os.Stderr)
+	s := newServerNew()
+	req, _ := http.NewRequest("POST", "/echo", strings.NewReader(`{"flag":true,"nothing":null,"count":42}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	s.ServeHTTP(resp, req)
+	assert.Equal(t, 200, resp.Code)
+	assert.JSONEq(t, `{"flag":true,"nothing":null,"count":42}`, resp.Body.String())
+}
+
+// Bug #6: GET multi-value params — only last value was kept
+func TestRegressionGetMultiValueParams(t *testing.T) {
+	log.SetOutput(io.Discard)
+	defer log.SetOutput(os.Stderr)
+	s := newServerNew()
+	req, _ := http.NewRequest("GET", "/echo_query?x=a&x=b", nil)
+	resp := httptest.NewRecorder()
+	s.ServeHTTP(resp, req)
+	assert.Equal(t, 200, resp.Code)
+	var result map[string][]string
+	assert.NoError(t, json.Unmarshal(resp.Body.Bytes(), &result))
+	assert.ElementsMatch(t, []string{"a", "b"}, result["x"])
+}
+
+// Bug #7: form-encoded multi-value — only first value was kept
+func TestRegressionFormMultiValue(t *testing.T) {
+	log.SetOutput(io.Discard)
+	defer log.SetOutput(os.Stderr)
+	s := newServerNew()
+	req, _ := http.NewRequest("POST", "/echo_form", strings.NewReader("x=a&x=b"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp := httptest.NewRecorder()
+	s.ServeHTTP(resp, req)
+	assert.Equal(t, 200, resp.Code)
+	var result map[string][]string
+	assert.NoError(t, json.Unmarshal(resp.Body.Bytes(), &result))
+	assert.ElementsMatch(t, []string{"a", "b"}, result["x"])
+}
+
+// Bug #4: multipart FieldsToSkip was silently ignored
+func TestRegressionMultipartSkipFields(t *testing.T) {
+	log.SetOutput(io.Discard)
+	defer log.SetOutput(os.Stderr)
+	s := newServerNew(SkipFields("token"))
+
+	body := new(bytes.Buffer)
+	writer := multipart.NewWriter(body)
+	_ = writer.WriteField("token", "<script>evil</script>")
+	_ = writer.WriteField("name", "<b>test</b>")
+	writer.Close()
+
+	req, _ := http.NewRequest("POST", "/echo_multipart", body)
+	req.Header.Set("Content-Type", "multipart/form-data; boundary="+writer.Boundary())
+	resp := httptest.NewRecorder()
+	s.ServeHTTP(resp, req)
+
+	assert.Equal(t, 200, resp.Code)
+	var result map[string]string
+	assert.NoError(t, json.Unmarshal(resp.Body.Bytes(), &result))
+	assert.Equal(t, "<script>evil</script>", result["token"]) // skipped: not sanitized
+	assert.Equal(t, "test", result["name"])                   // sanitized: tags stripped
+}
+
+// Bug #8: empty multipart field incorrectly aborted the request
+func TestRegressionMultipartEmptyField(t *testing.T) {
+	log.SetOutput(io.Discard)
+	defer log.SetOutput(os.Stderr)
+	s := newServerNew()
+
+	body := new(bytes.Buffer)
+	writer := multipart.NewWriter(body)
+	_ = writer.WriteField("name", "")
+	_ = writer.WriteField("value", "test")
+	writer.Close()
+
+	req, _ := http.NewRequest("POST", "/echo_multipart", body)
+	req.Header.Set("Content-Type", "multipart/form-data; boundary="+writer.Boundary())
+	resp := httptest.NewRecorder()
+	s.ServeHTTP(resp, req)
+
+	assert.Equal(t, 200, resp.Code)
+	var result map[string]string
+	assert.NoError(t, json.Unmarshal(resp.Body.Bytes(), &result))
+	assert.Equal(t, "", result["name"])
+	assert.Equal(t, "test", result["value"])
+}
+
+// Bug #4: multipart BmPolicy was silently ignored (hardcoded StrictPolicy)
+// NOTE: currently passes because handleMultipart is a stub (Task 5).
+// After Task 5, this must pass because UGC policy is actually applied to the img tag.
+func TestRegressionMultipartUGCPolicy(t *testing.T) {
+	log.SetOutput(io.Discard)
+	defer log.SetOutput(os.Stderr)
+	s := newServerNew(WithUGCPolicy())
+
+	body := new(bytes.Buffer)
+	writer := multipart.NewWriter(body)
+	_ = writer.WriteField("comment", `<img src="https://example.com/img.jpg" alt="test">`)
+	writer.Close()
+
+	req, _ := http.NewRequest("POST", "/echo_multipart", body)
+	req.Header.Set("Content-Type", "multipart/form-data; boundary="+writer.Boundary())
+	resp := httptest.NewRecorder()
+	s.ServeHTTP(resp, req)
+
+	assert.Equal(t, 200, resp.Code)
+	var result map[string]string
+	assert.NoError(t, json.Unmarshal(resp.Body.Bytes(), &result))
+	assert.Contains(t, result["comment"], "<img") // UGC policy keeps safe img tags
+}

@@ -45,6 +45,7 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net/http"
 	"net/url"
 
 	"github.com/microcosm-cc/bluemonday"
@@ -155,17 +156,8 @@ func (mw *XssMw) XssRemove(c *gin.Context) error {
 	// https://golang.org/pkg/net/http/#Request
 
 	ReqMethod := c.Request.Method
-	//fmt.Printf("%v Method\n", ReqMethod)
-
-	//ReqBody := c.Request.Body
-	//fmt.Printf("%v URL\n", ReqBody)
-
-	// [application/json] only supported
 	ctHdr := c.Request.Header.Get("Content-Type")
-	//fmt.Printf("%v\n", ctHdr)
-
 	ctsLen := c.Request.Header.Get("Content-Length")
-	//fmt.Printf("%v\n", ctsLen)
 	ctLen, _ := strconv.Atoi(ctsLen)
 
 	// https://golang.org/src/net/http/request.go
@@ -208,8 +200,7 @@ func (mw *XssMw) XssRemove(c *gin.Context) error {
 			return err
 		}
 	}
-	// if here, all should be well or nothing was actually done,
-	// either way return happily
+
 	return nil
 }
 
@@ -631,4 +622,91 @@ func (mw *XssMw) unravelSlice(slce []interface{}, p *bluemonday.Policy) bytes.Bu
 	buff.Truncate(buff.Len() - 1) // remove last ','
 	buff.WriteByte(']')
 	return buff
+}
+
+// Option configures the XSS middleware.
+type Option func(*config)
+
+type config struct {
+	policy     *bluemonday.Policy
+	skipFields map[string]bool
+}
+
+// New returns a Gin middleware that sanitizes XSS from incoming requests.
+// It is safe for concurrent use.
+func New(opts ...Option) gin.HandlerFunc {
+	cfg := &config{skipFields: map[string]bool{"password": true}}
+	for _, o := range opts {
+		o(cfg)
+	}
+	if cfg.policy == nil {
+		cfg.policy = bluemonday.StrictPolicy()
+	}
+	p := cfg.policy
+	skip := cfg.skipFields
+
+	return func(c *gin.Context) {
+		method := c.Request.Method
+		ct := c.Request.Header.Get("Content-Type")
+		var err error
+		switch method {
+		case "POST", "PUT", "PATCH":
+			switch {
+			case strings.Contains(ct, "application/json"):
+				err = handleJSON(c, p, skip)
+			case strings.Contains(ct, "application/x-www-form-urlencoded"):
+				err = handleForm(c, p, skip)
+			case strings.Contains(ct, "multipart/form-data"):
+				err = handleMultipart(c, p, skip)
+			}
+		case "GET":
+			err = handleGET(c, p, skip)
+		}
+		if err != nil {
+			_ = c.AbortWithError(http.StatusBadRequest, err)
+			return
+		}
+		c.Next()
+	}
+}
+
+// WithPolicy sets a custom bluemonday policy.
+func WithPolicy(p *bluemonday.Policy) Option {
+	return func(c *config) { c.policy = p }
+}
+
+// WithStrictPolicy uses bluemonday.StrictPolicy (the default).
+func WithStrictPolicy() Option {
+	return func(c *config) { c.policy = bluemonday.StrictPolicy() }
+}
+
+// WithUGCPolicy uses bluemonday.UGCPolicy.
+func WithUGCPolicy() Option {
+	return func(c *config) { c.policy = bluemonday.UGCPolicy() }
+}
+
+// SkipFields adds field names to exclude from sanitization.
+// "password" is always skipped regardless of this option.
+func SkipFields(fields ...string) Option {
+	return func(c *config) {
+		for _, f := range fields {
+			c.skipFields[f] = true
+		}
+	}
+}
+
+func handleJSON(c *gin.Context, p *bluemonday.Policy, skip map[string]bool) error {
+	return nil // stub — implemented in Task 2
+}
+
+func handleGET(c *gin.Context, p *bluemonday.Policy, skip map[string]bool) error {
+	return nil // stub — implemented in Task 3
+}
+
+func handleForm(c *gin.Context, p *bluemonday.Policy, skip map[string]bool) error {
+	return nil // stub — implemented in Task 4
+}
+
+func handleMultipart(c *gin.Context, p *bluemonday.Policy, skip map[string]bool) error {
+	return nil // stub — implemented in Task 5
 }

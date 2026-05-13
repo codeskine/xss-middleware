@@ -42,9 +42,6 @@ type countingReader struct {
 }
 
 func (cr *countingReader) Read(p []byte) (int, error) {
-	if cr.n > cr.limit {
-		return 0, errBodyTooLarge
-	}
 	n, err := cr.r.Read(p)
 	cr.n += int64(n)
 	if cr.n > cr.limit {
@@ -138,14 +135,24 @@ func SkipFields(fields ...string) Option {
 
 // WithMaxBodySize caps JSON and form-encoded request bodies.
 // Requests exceeding the limit are rejected with 413. Default: 1 MB.
+// Values <= 0 are ignored and the default is used.
 func WithMaxBodySize(n int64) Option {
-	return func(c *config) { c.maxBodySize = n }
+	return func(c *config) {
+		if n > 0 {
+			c.maxBodySize = n
+		}
+	}
 }
 
 // WithMaxMultipartSize caps multipart/form-data request bodies.
 // Requests exceeding the limit are rejected with 413. Default: 32 MB.
+// Values <= 0 are ignored and the default is used.
 func WithMaxMultipartSize(n int64) Option {
-	return func(c *config) { c.maxMultipartSize = n }
+	return func(c *config) {
+		if n > 0 {
+			c.maxMultipartSize = n
+		}
+	}
 }
 
 func handleJSON(c *gin.Context, p *bluemonday.Policy, skip map[string]bool, maxBodySize int64) error {
@@ -223,16 +230,24 @@ func sanitizeMap(val map[string]any, p *bluemonday.Policy, skip map[string]bool,
 
 func handleGET(c *gin.Context, p *bluemonday.Policy, skip map[string]bool) error {
 	q := c.Request.URL.Query()
+	result := make(url.Values)
 	for key, items := range q {
+		cleanKey := p.Sanitize(key)
 		if skip[key] {
+			if _, exists := result[cleanKey]; !exists {
+				result[cleanKey] = items
+			}
 			continue
 		}
-		q.Del(key)
-		for _, item := range items {
-			q.Add(key, p.Sanitize(item))
+		cleaned := make([]string, len(items))
+		for i, v := range items {
+			cleaned[i] = p.Sanitize(v)
+		}
+		if _, exists := result[cleanKey]; !exists {
+			result[cleanKey] = cleaned
 		}
 	}
-	c.Request.URL.RawQuery = q.Encode()
+	c.Request.URL.RawQuery = result.Encode()
 	return nil
 }
 
@@ -254,15 +269,20 @@ func handleForm(c *gin.Context, p *bluemonday.Policy, skip map[string]bool, maxB
 	}
 	result := make(url.Values)
 	for k, vals := range m {
+		cleanKey := p.Sanitize(k)
 		if skip[k] {
-			result[k] = vals
+			if _, exists := result[cleanKey]; !exists {
+				result[cleanKey] = vals
+			}
 			continue
 		}
 		sanitized := make([]string, len(vals))
 		for i, v := range vals {
 			sanitized[i] = p.Sanitize(v)
 		}
-		result[k] = sanitized
+		if _, exists := result[cleanKey]; !exists {
+			result[cleanKey] = sanitized
+		}
 	}
 	c.Request.Body = io.NopCloser(strings.NewReader(result.Encode()))
 	return nil
@@ -308,13 +328,29 @@ func handleMultipart(c *gin.Context, p *bluemonday.Policy, skip map[string]bool,
 	return nil
 }
 
+// isBinaryContentType reports whether the media type is a known binary format
+// that should be passed through without sanitization. Only explicitly binary
+// types (images, video, audio, raw binary blobs) are allowed through; all
+// others — including application/javascript, application/json, etc. — are sanitized.
+func isBinaryContentType(ct string) bool {
+	mediaType, _, _ := mime.ParseMediaType(ct)
+	return strings.HasPrefix(mediaType, "image/") ||
+		strings.HasPrefix(mediaType, "video/") ||
+		strings.HasPrefix(mediaType, "audio/") ||
+		mediaType == "application/octet-stream" ||
+		mediaType == "application/pdf" ||
+		mediaType == "application/zip" ||
+		mediaType == "application/gzip" ||
+		mediaType == "application/x-tar"
+}
+
 func sanitizePart(part *multipart.Part, mw *multipart.Writer, p *bluemonday.Policy, skip map[string]bool) error {
 	fw, err := mw.CreatePart(part.Header)
 	if err != nil {
 		return err
 	}
 	ct := part.Header.Get("Content-Type")
-	if ct != "" && !strings.HasPrefix(ct, "text/") {
+	if ct != "" && isBinaryContentType(ct) {
 		_, err = io.Copy(fw, part)
 		return err
 	}

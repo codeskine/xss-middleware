@@ -545,6 +545,87 @@ func TestJsonKeyCollision(t *testing.T) {
 	assert.Len(t, result, 1)
 }
 
+// Security: multipart part with Content-Type: application/javascript must be sanitized (not passed through)
+func TestMultipartJavascriptBypassFixed(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s := newServer()
+
+	body := new(bytes.Buffer)
+	mw := multipart.NewWriter(body)
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", `form-data; name="script"; filename="evil.js"`)
+	h.Set("Content-Type", "application/javascript")
+	fw, _ := mw.CreatePart(h)
+	fw.Write([]byte("<script>alert(1)</script>"))
+	mw.Close()
+
+	req, _ := http.NewRequest("POST", "/echo_multipart", body)
+	req.Header.Set("Content-Type", "multipart/form-data; boundary="+mw.Boundary())
+	resp := httptest.NewRecorder()
+	s.ServeHTTP(resp, req)
+	assert.Equal(t, http.StatusOK, resp.Code)
+	assert.NotContains(t, resp.Body.String(), "<script>")
+	assert.NotContains(t, resp.Body.String(), "\\u003cscript")
+}
+
+// GET query parameter keys with XSS must be sanitized
+func TestGetKeysSanitized(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(New())
+	r.GET("/q", func(c *gin.Context) {
+		c.String(200, c.Request.URL.RawQuery)
+	})
+	req, _ := http.NewRequest("GET", "/q?%3Cscript%3Exss%3C%2Fscript%3E=val", nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	assert.Equal(t, 200, resp.Code)
+	assert.NotContains(t, resp.Body.String(), "<script>")
+	assert.NotContains(t, resp.Body.String(), "%3Cscript%3E")
+}
+
+// Form-encoded field keys with XSS must be sanitized
+func TestFormKeysSanitized(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(New())
+	r.POST("/f", func(c *gin.Context) {
+		b, _ := readAll(c)
+		c.Data(200, "text/plain", b)
+	})
+	req, _ := http.NewRequest("POST", "/f", strings.NewReader("%3Cscript%3Exss%3C%2Fscript%3E=val"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	assert.Equal(t, 200, resp.Code)
+	assert.NotContains(t, resp.Body.String(), "<script>")
+	assert.NotContains(t, resp.Body.String(), "%3Cscript%3E")
+}
+
+// WithMaxBodySize(0) must fall back to default and not reject normal requests
+func TestWithMaxBodySizeZeroUsesDefault(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s := newServer(WithMaxBodySize(0))
+	body := strings.NewReader(`{"name":"hello"}`)
+	req, _ := http.NewRequest("POST", "/echo", body)
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	s.ServeHTTP(resp, req)
+	assert.Equal(t, http.StatusOK, resp.Code)
+}
+
+// WithMaxBodySize(-1) must fall back to default and not reject normal requests
+func TestWithMaxBodySizeNegativeUsesDefault(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s := newServer(WithMaxBodySize(-1))
+	body := strings.NewReader(`{"name":"hello"}`)
+	req, _ := http.NewRequest("POST", "/echo", body)
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	s.ServeHTTP(resp, req)
+	assert.Equal(t, http.StatusOK, resp.Code)
+}
+
 // JSON nested 65 levels deep must not stack overflow; deep values are nil'd
 func TestJsonMaxDepth(t *testing.T) {
 	gin.SetMode(gin.TestMode)

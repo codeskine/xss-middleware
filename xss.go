@@ -751,7 +751,18 @@ func handleJSON(c *gin.Context, p *bluemonday.Policy, skip map[string]bool) erro
 }
 
 func handleGET(c *gin.Context, p *bluemonday.Policy, skip map[string]bool) error {
-	return nil // stub — implemented in Task 3
+	q := c.Request.URL.Query()
+	for key, items := range q {
+		if skip[key] {
+			continue
+		}
+		q.Del(key)
+		for _, item := range items {
+			q.Add(key, p.Sanitize(item))
+		}
+	}
+	c.Request.URL.RawQuery = q.Encode()
+	return nil
 }
 
 func handleForm(c *gin.Context, p *bluemonday.Policy, skip map[string]bool) error {

@@ -386,3 +386,48 @@ func TestRegressionMultipartBoundaryWithExtraParams(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "hello")
 	assert.NotContains(t, w.Body.String(), "<b>")
 }
+
+func TestMaxBodySizeConfigurable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s := newServer(WithMaxBodySize(100))
+	body := strings.NewReader(`{"name":"` + strings.Repeat("a", 100) + `"}`)
+	req, _ := http.NewRequest("POST", "/echo", body)
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	s.ServeHTTP(resp, req)
+	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.Code)
+}
+
+func TestBodySizeLimitJSON(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s := newServer(WithMaxBodySize(10))
+	body := strings.NewReader(`{"name":"hello world this is too long"}`)
+	req, _ := http.NewRequest("POST", "/echo", body)
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	s.ServeHTTP(resp, req)
+	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.Code)
+}
+
+func TestBodySizeLimitForm(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s := newServer(WithMaxBodySize(10))
+	body := strings.NewReader("name=hello+world+this+is+too+long")
+	req, _ := http.NewRequest("POST", "/echo_form", body)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp := httptest.NewRecorder()
+	s.ServeHTTP(resp, req)
+	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.Code)
+}
+
+func TestBodySizeUnderLimitPasses(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s := newServer(WithMaxBodySize(100))
+	body := strings.NewReader(`{"name":"hi"}`)
+	req, _ := http.NewRequest("POST", "/echo", body)
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	s.ServeHTTP(resp, req)
+	assert.Equal(t, http.StatusOK, resp.Code)
+	assert.JSONEq(t, `{"name":"hi"}`, resp.Body.String())
+}

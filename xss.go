@@ -27,18 +27,31 @@ import (
 	"github.com/microcosm-cc/bluemonday"
 )
 
+const (
+	defaultMaxBodySize      = 1 << 20  // 1 MB
+	defaultMaxMultipartSize = 32 << 20 // 32 MB
+)
+
+var errBodyTooLarge = errors.New("request body too large")
+
 // Option configures the XSS middleware.
 type Option func(*config)
 
 type config struct {
-	policy     *bluemonday.Policy
-	skipFields map[string]bool
+	policy           *bluemonday.Policy
+	skipFields       map[string]bool
+	maxBodySize      int64
+	maxMultipartSize int64
 }
 
 // New returns a Gin middleware that sanitizes XSS from incoming requests.
 // It is safe for concurrent use.
 func New(opts ...Option) gin.HandlerFunc {
-	cfg := &config{skipFields: map[string]bool{"password": true}}
+	cfg := &config{
+		skipFields:       map[string]bool{"password": true},
+		maxBodySize:      defaultMaxBodySize,
+		maxMultipartSize: defaultMaxMultipartSize,
+	}
 	for _, o := range opts {
 		o(cfg)
 	}
@@ -47,6 +60,8 @@ func New(opts ...Option) gin.HandlerFunc {
 	}
 	p := cfg.policy
 	skip := cfg.skipFields
+	maxBody := cfg.maxBodySize
+	maxMultipart := cfg.maxMultipartSize
 
 	return func(c *gin.Context) {
 		method := c.Request.Method
@@ -56,17 +71,21 @@ func New(opts ...Option) gin.HandlerFunc {
 		case "POST", "PUT", "PATCH":
 			switch {
 			case strings.Contains(ct, "application/json"):
-				err = handleJSON(c, p, skip)
+				err = handleJSON(c, p, skip, maxBody)
 			case strings.Contains(ct, "application/x-www-form-urlencoded"):
-				err = handleForm(c, p, skip)
+				err = handleForm(c, p, skip, maxBody)
 			case strings.Contains(ct, "multipart/form-data"):
-				err = handleMultipart(c, p, skip)
+				err = handleMultipart(c, p, skip, maxMultipart)
 			}
 		case "GET":
 			err = handleGET(c, p, skip)
 		}
 		if err != nil {
-			_ = c.AbortWithError(http.StatusBadRequest, err)
+			status := http.StatusBadRequest
+			if errors.Is(err, errBodyTooLarge) {
+				status = http.StatusRequestEntityTooLarge
+			}
+			_ = c.AbortWithError(status, err)
 			return
 		}
 		c.Next()
@@ -98,11 +117,31 @@ func SkipFields(fields ...string) Option {
 	}
 }
 
-func handleJSON(c *gin.Context, p *bluemonday.Policy, skip map[string]bool) error {
+// WithMaxBodySize caps JSON and form-encoded request bodies.
+// Requests exceeding the limit are rejected with 413. Default: 1 MB.
+func WithMaxBodySize(n int64) Option {
+	return func(c *config) { c.maxBodySize = n }
+}
+
+// WithMaxMultipartSize caps multipart/form-data request bodies.
+// Requests exceeding the limit are rejected with 413. Default: 32 MB.
+func WithMaxMultipartSize(n int64) Option {
+	return func(c *config) { c.maxMultipartSize = n }
+}
+
+func handleJSON(c *gin.Context, p *bluemonday.Policy, skip map[string]bool, maxBodySize int64) error {
 	if c.Request.Body == nil {
 		return nil
 	}
-	out, err := sanitizeJSON(c.Request.Body, p, skip)
+	limited := io.LimitReader(c.Request.Body, maxBodySize+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return err
+	}
+	if int64(len(data)) > maxBodySize {
+		return errBodyTooLarge
+	}
+	out, err := sanitizeJSON(bytes.NewReader(data), p, skip)
 	if err != nil {
 		return err
 	}
@@ -168,15 +207,19 @@ func handleGET(c *gin.Context, p *bluemonday.Policy, skip map[string]bool) error
 	return nil
 }
 
-func handleForm(c *gin.Context, p *bluemonday.Policy, skip map[string]bool) error {
+func handleForm(c *gin.Context, p *bluemonday.Policy, skip map[string]bool, maxBodySize int64) error {
 	if c.Request.Body == nil {
 		return nil
 	}
-	body, err := io.ReadAll(c.Request.Body)
+	limited := io.LimitReader(c.Request.Body, maxBodySize+1)
+	data, err := io.ReadAll(limited)
 	if err != nil {
 		return err
 	}
-	m, err := url.ParseQuery(string(body))
+	if int64(len(data)) > maxBodySize {
+		return errBodyTooLarge
+	}
+	m, err := url.ParseQuery(string(data))
 	if err != nil {
 		return err
 	}
@@ -196,7 +239,7 @@ func handleForm(c *gin.Context, p *bluemonday.Policy, skip map[string]bool) erro
 	return nil
 }
 
-func handleMultipart(c *gin.Context, p *bluemonday.Policy, skip map[string]bool) error {
+func handleMultipart(c *gin.Context, p *bluemonday.Policy, skip map[string]bool, maxMultipartSize int64) error {
 	ctHdr := c.Request.Header.Get("Content-Type")
 	_, params, err := mime.ParseMediaType(ctHdr)
 	if err != nil || params["boundary"] == "" {

@@ -44,6 +44,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -794,5 +795,55 @@ func handleForm(c *gin.Context, p *bluemonday.Policy, skip map[string]bool) erro
 }
 
 func handleMultipart(c *gin.Context, p *bluemonday.Policy, skip map[string]bool) error {
-	return nil // stub — implemented in Task 5
+	ctHdr := c.Request.Header.Get("Content-Type")
+	_, params, err := mime.ParseMediaType(ctHdr)
+	if err != nil || params["boundary"] == "" {
+		return errors.New("invalid multipart content-type")
+	}
+	boundary := params["boundary"]
+
+	mr := multipart.NewReader(c.Request.Body, boundary)
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	if err := mw.SetBoundary(boundary); err != nil {
+		return err
+	}
+
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		fw, err := mw.CreatePart(part.Header)
+		if err != nil {
+			return err
+		}
+
+		fieldName := part.FormName()
+		if skip[fieldName] {
+			if _, err := io.Copy(fw, part); err != nil {
+				return err
+			}
+			continue
+		}
+
+		fieldBytes, err := io.ReadAll(part)
+		if err != nil {
+			return err
+		}
+		sanitized := p.Sanitize(string(fieldBytes))
+		if _, err := fw.Write([]byte(sanitized)); err != nil {
+			return err
+		}
+	}
+
+	if err := mw.Close(); err != nil {
+		return err
+	}
+	c.Request.Body = io.NopCloser(&buf)
+	return nil
 }

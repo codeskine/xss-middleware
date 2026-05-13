@@ -36,12 +36,14 @@ func main() {
 }
 ```
 
-### Custom policy and skip fields
+### Custom policy, skip fields, and size limits
 
 ```go
 r.Use(xss.New(
     xss.WithUGCPolicy(),
     xss.SkipFields("token", "create_date"),
+    xss.WithMaxBodySize(512 * 1024),    // 512 KB for JSON / form (default: 1 MB)
+    xss.WithMaxMultipartSize(10 << 20), // 10 MB for multipart (default: 32 MB)
 ))
 ```
 
@@ -62,6 +64,8 @@ r.Use(xss.New(xss.WithPolicy(p)))
 | `WithUGCPolicy()` | Use `bluemonday.UGCPolicy` |
 | `WithPolicy(p)` | Use a custom `*bluemonday.Policy` |
 | `SkipFields(fields...)` | Skip sanitization for the named fields (`"password"` is always skipped) |
+| `WithMaxBodySize(n)` | Cap JSON and form-encoded bodies; requests over the limit get 413 (default: 1 MB) |
+| `WithMaxMultipartSize(n)` | Cap multipart bodies; requests over the limit get 413 (default: 32 MB) |
 
 ## What gets sanitized
 

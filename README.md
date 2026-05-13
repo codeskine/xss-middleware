@@ -1,110 +1,86 @@
-# XSS Middleware 
+# XSS Middleware
 
-XssMw is an middleware written in [Golang](https://golang.org/) for the [Gin](https://github.com/gin-gonic/gin) web framework. Although, it should be useable with any Go web framework which utilizes Golang's "net/http" native library in a similiar way to Gin. The idea behind XssMw is to "auto remove XSS" from user submitted input. It's applied on http GET, POST, PATCH and PUT requests only.
+A [Gin](https://github.com/gin-gonic/gin) middleware that automatically sanitizes XSS from incoming HTTP requests before they reach your route handlers. Supports GET query params, JSON, form-encoded, and multipart form bodies.
 
-The XSS filtering is performed by HTML sanitizer [Bluemonday](https://github.com/microcosm-cc/bluemonday).
-
-The default is to the strictest policy - StrictPolicy()
+XSS filtering is performed by [bluemonday](https://github.com/microcosm-cc/bluemonday). The default policy is `StrictPolicy`.
 
 ## Installation
 
-`go get -u github.com/sahilchopra/gin-gonic-xss-middleware` <br>
-`go mod tidy`
+```
+go get github.com/codeskine/xss-middleware
+go mod tidy
+```
 
-## How To Use it?
+## Usage
 
-Using the defaults,
-It will skip filtering for a field named 'password' but will run the filter on everything else.
-Uses the Bluemonday strictest policy - StrictPolicy()
+### Defaults
+
+Uses `StrictPolicy`. The `password` field is always skipped.
 
 ```go
 package main
 
 import (
-    xss "github.com/sahilchopra/gin-gonic-xss-middleware"
     "github.com/gin-gonic/gin"
+    xss "github.com/codeskine/xss-middleware"
 )
 
 func main() {
     r := gin.Default()
-
-    // include as standard middleware
-    var xssMdlwr xss.XssMw
-    r.Use(xssMdlwr.RemoveXss())
+    r.Use(xss.New())
 
     r.GET("/ping", func(c *gin.Context) {
-        c.JSON(200, gin.H{
-            "message": "pong",
-        })
+        c.JSON(200, gin.H{"message": "pong"})
     })
-    r.Run() // listen and serve on 0.0.0.0:8080
+    r.Run()
 }
-
 ```
 
-Using some config options, here It will skip filtering for a fields named 'password', "create_date" and "token" but will run the filter  on everything else.
-
-Uses Bluemonday UGCPolicy
-
+### Custom policy and skip fields
 
 ```go
-package main
-
-import (
-    xss "github.com/sahilchopra/gin-gonic-xss-middleware"
-    "github.com/gin-gonic/gin"
-)
-
-func main() {
-    r := gin.Default()
-
-    xssMdlwr := &xss.XssMw{
-            FieldsToSkip: []string{"password", "create_date", "token"},
-            BmPolicy:     "UGCPolicy",
-    }
-    r.Use(xssMdlwr.RemoveXss())
-
-    r.GET("/ping", func(c *gin.Context) {
-        c.JSON(200, gin.H{
-            "message": "pong",
-        })
-    })
-    r.Run() // listen and serve on 0.0.0.0:8080
-}
-
+r.Use(xss.New(
+    xss.WithUGCPolicy(),
+    xss.SkipFields("token", "create_date"),
+))
 ```
 
-## Data
+### Bring your own bluemonday policy
 
-Currently, it removes (deletes) all HTML and malicious detected input from user input on  the submitted request to the server. It handles three Request types:
+```go
+p := bluemonday.NewPolicy()
+p.AllowElements("b", "i", "em")
 
-* JSON requests - Content-Type application/json
-* Form Encoded - Content-Type application/x-www-form-urlencoded
-* Multipart Form Data - Content-Type multipart/form-data
+r.Use(xss.New(xss.WithPolicy(p)))
+```
 
-A future plan is have a feature to store all user submitted data intact and have the option to filter it out on the http response, so you can choose your preference. In other words: data would be stored in the database as it was submitted and removed in Responses back to the user. Pros: data integrity. Cons: XSS exploits still present.
+## Options
 
-## NOTE: This is beta level code with minimal actual real world usage
+| Option | Description |
+|--------|-------------|
+| `WithStrictPolicy()` | Use `bluemonday.StrictPolicy` (default) |
+| `WithUGCPolicy()` | Use `bluemonday.UGCPolicy` |
+| `WithPolicy(p)` | Use a custom `*bluemonday.Policy` |
+| `SkipFields(fields...)` | Skip sanitization for the named fields (`"password"` is always skipped) |
 
-## Contributing 
+## What gets sanitized
 
- - You are welcome to contribute to this project. Please open a issue first for discussing before opening a pull request.
- - Please update/add tests as appropriate.
- - Send pull request against the develop branch.
- - Please use the same formatting as the Go authors. Run code through gofmt before submitting. 
+| Request type | Content-Type |
+|---|---|
+| GET | query parameters |
+| POST / PUT / PATCH | `application/json` |
+| POST / PUT / PATCH | `application/x-www-form-urlencoded` |
+| POST / PUT / PATCH | `multipart/form-data` (text fields only; file parts are passed through unchanged) |
+
+All string values — including JSON object keys — are sanitized. Multi-value parameters are fully preserved.
+
+## Contributing
+
+- Open an issue before submitting a pull request.
+- Add or update tests as appropriate.
+- Run `gofmt -w .` before submitting.
 
 ## Acknowledgements
 
-Thanks to dvwright (https://github.com/dvwright/xss-mw) from which this repository was forked.
-
-https://github.com/goware/jsonp <br>
-https://github.com/appleboy/gin-jwt/tree/v2.1.1 <br>
-https://github.com/microcosm-cc/bluemonday <br>
-
-Learning source: https://static.googleusercontent.com/intl/hu/about/appsecurity/learning/xss/
-
-> A note on manually escaping input
-> Writing your own code for escaping input and then properly and consistently applying it is extremely difficult. 
-> We do not recommend that you manually escape user-supplied data. Instead, we strongly recommend that you 
-> use a templating system or web development framework that provides context-aware auto-escaping. 
-
+Forked from [dvwright/xss-mw](https://github.com/dvwright/xss-mw).  
+XSS filtering by [microcosm-cc/bluemonday](https://github.com/microcosm-cc/bluemonday).

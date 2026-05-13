@@ -34,7 +34,7 @@ const (
 )
 
 var (
-	errBodyTooLarge    = errors.New("request body too large")
+	errBodyTooLarge     = errors.New("request body too large")
 	errInvalidMultipart = errors.New("invalid multipart content-type")
 )
 
@@ -217,7 +217,7 @@ func sanitizeMap(val map[string]any, p *bluemonday.Policy, skip map[string]bool,
 	}
 	// collect key renames before applying — avoids map mutation during iteration
 	type rename struct{ old, new string }
-	var renames []rename
+	renames := make([]rename, 0, len(val))
 	for k := range val {
 		if clean := p.Sanitize(k); clean != k {
 			renames = append(renames, rename{k, clean})
@@ -313,7 +313,7 @@ func handleMultipart(c *gin.Context, p *bluemonday.Policy, skip map[string]bool,
 
 	for {
 		part, err := mr.NextPart()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -337,14 +337,15 @@ func handleMultipart(c *gin.Context, p *bluemonday.Policy, skip map[string]bool,
 // others — including application/javascript, application/json, etc. — are sanitized.
 func isBinaryContentType(ct string) bool {
 	mediaType, _, _ := mime.ParseMediaType(ct)
-	return strings.HasPrefix(mediaType, "image/") ||
+	isMedia := strings.HasPrefix(mediaType, "image/") ||
 		strings.HasPrefix(mediaType, "video/") ||
-		strings.HasPrefix(mediaType, "audio/") ||
-		mediaType == "application/octet-stream" ||
+		strings.HasPrefix(mediaType, "audio/")
+	isArchiveOrBlob := mediaType == "application/octet-stream" ||
 		mediaType == "application/pdf" ||
 		mediaType == "application/zip" ||
 		mediaType == "application/gzip" ||
 		mediaType == "application/x-tar"
+	return isMedia || isArchiveOrBlob
 }
 
 func sanitizePart(part *multipart.Part, mw *multipart.Writer, p *bluemonday.Policy, skip map[string]bool) error {

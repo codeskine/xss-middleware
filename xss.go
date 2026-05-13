@@ -111,7 +111,7 @@ func handleJSON(c *gin.Context, p *bluemonday.Policy, skip map[string]bool) erro
 }
 
 func sanitizeJSON(body io.Reader, p *bluemonday.Policy, skip map[string]bool) ([]byte, error) {
-	var v interface{}
+	var v any
 	d := json.NewDecoder(body)
 	d.UseNumber() // preserves numeric precision (no float64 precision loss)
 	if err := d.Decode(&v); err != nil {
@@ -121,9 +121,9 @@ func sanitizeJSON(body io.Reader, p *bluemonday.Policy, skip map[string]bool) ([
 	return json.Marshal(v)
 }
 
-func sanitizeValue(v *interface{}, p *bluemonday.Policy, skip map[string]bool) {
+func sanitizeValue(v *any, p *bluemonday.Policy, skip map[string]bool) {
 	switch val := (*v).(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		for k, child := range val {
 			if skip[k] {
 				continue
@@ -143,7 +143,7 @@ func sanitizeValue(v *interface{}, p *bluemonday.Policy, skip map[string]bool) {
 			val[r.new] = val[r.old]
 			delete(val, r.old)
 		}
-	case []interface{}:
+	case []any:
 		for i := range val {
 			sanitizeValue(&val[i], p, skip)
 		}

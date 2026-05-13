@@ -293,7 +293,8 @@ func handleMultipart(c *gin.Context, p *bluemonday.Policy, skip map[string]bool,
 
 		fieldName := part.FormName()
 
-		if part.FileName() != "" {
+		ct := part.Header.Get("Content-Type")
+		if ct != "" && !strings.HasPrefix(ct, "text/") {
 			if _, err := io.Copy(fw, part); err != nil {
 				return err
 			}

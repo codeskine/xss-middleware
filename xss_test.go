@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
 	"strings"
 	"sync"
 	"testing"
@@ -152,10 +153,21 @@ func newServer(opts ...Option) *gin.Engine {
 			c.JSON(400, gin.H{"error": err.Error()})
 			return
 		}
-		result := map[string]string{}
+		result := map[string]interface{}{}
 		for k, vals := range c.Request.MultipartForm.Value {
 			if len(vals) > 0 {
 				result[k] = vals[0]
+			}
+		}
+		// Also include file parts (they appear as empty files when they're text fields with filename=)
+		for k, files := range c.Request.MultipartForm.File {
+			if len(files) > 0 {
+				fh := files[0]
+				f, _ := fh.Open()
+				data := make([]byte, fh.Size)
+				f.Read(data)
+				f.Close()
+				result[k] = string(data)
 			}
 		}
 		c.JSON(200, result)
@@ -469,5 +481,50 @@ func TestMultipartNilBody(t *testing.T) {
 	assert.NotPanics(t, func() {
 		s.ServeHTTP(resp, req)
 	})
+	assert.Equal(t, http.StatusOK, resp.Code)
+}
+
+// Security: text field with filename= but no Content-Type must still be sanitized
+func TestMultipartFilenameBypassFixed(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s := newServer()
+
+	body := new(bytes.Buffer)
+	mw := multipart.NewWriter(body)
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", `form-data; name="bio"; filename="x.txt"`)
+	// No Content-Type — old code skipped sanitization for any non-empty filename
+	fw, _ := mw.CreatePart(h)
+	fw.Write([]byte("<script>alert(1)</script>"))
+	mw.Close()
+
+	req, _ := http.NewRequest("POST", "/echo_multipart", body)
+	req.Header.Set("Content-Type", "multipart/form-data; boundary="+mw.Boundary())
+	resp := httptest.NewRecorder()
+	s.ServeHTTP(resp, req)
+	assert.Equal(t, http.StatusOK, resp.Code)
+	// Check for both literal and JSON-escaped versions (JSON encoder escapes < and >)
+	assert.NotContains(t, resp.Body.String(), "<script>")
+	assert.NotContains(t, resp.Body.String(), "\\u003cscript")
+}
+
+// Binary file parts with explicit non-text Content-Type must pass through verbatim
+func TestMultipartBinaryPartPreserved(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s := newServer()
+
+	body := new(bytes.Buffer)
+	mw := multipart.NewWriter(body)
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", `form-data; name="avatar"; filename="photo.jpg"`)
+	h.Set("Content-Type", "image/jpeg")
+	fw, _ := mw.CreatePart(h)
+	fw.Write([]byte{0xFF, 0xD8, 0xFF, 0xE0}) // JPEG magic bytes
+	mw.Close()
+
+	req, _ := http.NewRequest("POST", "/echo_multipart", body)
+	req.Header.Set("Content-Type", "multipart/form-data; boundary="+mw.Boundary())
+	resp := httptest.NewRecorder()
+	s.ServeHTTP(resp, req)
 	assert.Equal(t, http.StatusOK, resp.Code)
 }

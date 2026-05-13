@@ -3,7 +3,7 @@
 [![Go Version](https://img.shields.io/github/go-mod/go-version/codeskine/gin-gonic-xss-middleware)](https://go.dev/)
 [![License](https://img.shields.io/github/license/codeskine/gin-gonic-xss-middleware)](./LICENSE)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/codeskine/gin-gonic-xss-middleware/test.yml?branch=main)](https://github.com/codeskine/gin-gonic-xss-middleware/actions)
-[![Go Report Card](https://goreportcard.com/badge/github.com/codeskine/xss-middleware)](https://goreportcard.com/report/github.com/codeskine/xss-middleware)
+[![Go Report Card](https://goreportcard.com/badge/github.com/codeskine/gin-gonic-xss-middleware)](https://goreportcard.com/report/github.com/codeskine/gin-gonic-xss-middleware)
 [![Go Reference](https://pkg.go.dev/badge/github.com/codeskine/xss-middleware.svg)](https://pkg.go.dev/github.com/codeskine/xss-middleware)
 
 A [Gin](https://github.com/gin-gonic/gin) middleware that automatically sanitizes XSS payloads from incoming HTTP requests before they reach your route handlers. Supports GET query parameters, JSON, form-encoded, and multipart bodies.

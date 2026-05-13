@@ -766,7 +766,31 @@ func handleGET(c *gin.Context, p *bluemonday.Policy, skip map[string]bool) error
 }
 
 func handleForm(c *gin.Context, p *bluemonday.Policy, skip map[string]bool) error {
-	return nil // stub — implemented in Task 4
+	if c.Request.Body == nil {
+		return nil
+	}
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		return err
+	}
+	m, err := url.ParseQuery(string(body))
+	if err != nil {
+		return err
+	}
+	result := make(url.Values)
+	for k, vals := range m {
+		if skip[k] {
+			result[k] = vals
+			continue
+		}
+		sanitized := make([]string, len(vals))
+		for i, v := range vals {
+			sanitized[i] = p.Sanitize(v)
+		}
+		result[k] = sanitized
+	}
+	c.Request.Body = io.NopCloser(strings.NewReader(result.Encode()))
+	return nil
 }
 
 func handleMultipart(c *gin.Context, p *bluemonday.Policy, skip map[string]bool) error {

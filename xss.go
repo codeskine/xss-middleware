@@ -2,14 +2,33 @@
 // Use of this source code is governed by a MIT style
 // license that can be found in the LICENSE file.
 
-// Package xss provides a Gin middleware that sanitizes XSS from incoming HTTP
-// requests before they reach route handlers.
+// Package xss provides a Gin middleware that sanitizes XSS payloads from
+// incoming HTTP requests before they reach route handlers.
 //
-// It handles GET (query params), application/json, application/x-www-form-urlencoded,
-// and multipart/form-data content types.
+// # Quick start
 //
-// XSS filtering is performed by the HTML sanitizer https://github.com/microcosm-cc/bluemonday.
-// The default policy is StrictPolicy.
+//	r := gin.Default()
+//	r.Use(xss.New()) // StrictPolicy, "password" skipped, 1 MB body cap
+//
+// # Supported content types
+//
+//   - GET: query string keys and values
+//   - POST/PUT/PATCH with application/json: all string values and object keys
+//   - POST/PUT/PATCH with application/x-www-form-urlencoded: all keys and values
+//   - POST/PUT/PATCH with multipart/form-data: text field keys and values; binary
+//     parts (images, video, audio, archives) pass through unchanged
+//
+// Content-Type matching is case-insensitive. All other methods and content types
+// pass through without modification.
+//
+// # Sanitization
+//
+// String values and object keys are sanitized using [bluemonday]. The default
+// policy ([bluemonday.StrictPolicy]) strips all HTML tags and attributes, leaving
+// plain text only. Use [WithUGCPolicy] or [WithPolicy] to configure a different
+// policy.
+//
+// [bluemonday]: https://github.com/microcosm-cc/bluemonday
 package xss
 
 import (
@@ -53,7 +72,8 @@ func (cr *countingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// Option configures the XSS middleware.
+// Option is a functional option that configures the middleware returned by [New].
+// Options are applied in the order they are passed; later options override earlier ones.
 type Option func(*config)
 
 type config struct {
@@ -63,8 +83,17 @@ type config struct {
 	maxMultipartSize int64
 }
 
-// New returns a Gin middleware that sanitizes XSS from incoming requests.
-// It is safe for concurrent use.
+// New returns a Gin middleware handler that sanitizes XSS payloads from incoming
+// HTTP requests before they reach route handlers. It is safe for concurrent use;
+// all configuration is captured at construction time and each request operates on
+// its own local state.
+//
+// Requests that exceed the configured body size limit are rejected with 413.
+// Malformed JSON, form data, or multipart boundaries are rejected with 400.
+// All other errors (e.g. read failures) are also rejected with 400.
+//
+// Defaults: [bluemonday.StrictPolicy], "password" field always skipped,
+// 1 MB cap for JSON/form bodies, 32 MB cap for multipart bodies.
 func New(opts ...Option) gin.HandlerFunc {
 	cfg := &config{
 		skipFields:       map[string]bool{"password": true},
@@ -111,23 +140,43 @@ func New(opts ...Option) gin.HandlerFunc {
 	}
 }
 
-// WithPolicy sets a custom bluemonday policy.
+// WithPolicy configures the middleware to use p for HTML sanitization, overriding
+// any previously set policy option. Use this when neither [WithStrictPolicy] nor
+// [WithUGCPolicy] fits — for example, to allow a specific set of elements for a
+// rich-text field.
+//
+// The caller is responsible for ensuring p is safe for concurrent use.
 func WithPolicy(p *bluemonday.Policy) Option {
 	return func(c *config) { c.policy = p }
 }
 
-// WithStrictPolicy uses bluemonday.StrictPolicy (the default).
+// WithStrictPolicy configures the middleware to use [bluemonday.StrictPolicy],
+// which strips all HTML tags and attributes, leaving plain text only.
+// This is the default when no policy option is specified.
 func WithStrictPolicy() Option {
 	return func(c *config) { c.policy = bluemonday.StrictPolicy() }
 }
 
-// WithUGCPolicy uses bluemonday.UGCPolicy.
+// WithUGCPolicy configures the middleware to use [bluemonday.UGCPolicy], which
+// allows a curated subset of HTML safe for user-generated content: basic formatting
+// (b, i, em, strong), links (a with rel="nofollow"), images with safe src
+// attributes, and similar. Scripts, style attributes, and other dangerous
+// constructs are always stripped.
+//
+// Use this policy when the application renders sanitized content as HTML, for
+// example in comment sections or WYSIWYG editors.
 func WithUGCPolicy() Option {
 	return func(c *config) { c.policy = bluemonday.UGCPolicy() }
 }
 
-// SkipFields adds field names to exclude from sanitization.
+// SkipFields registers field names whose values bypass sanitization.
 // "password" is always skipped regardless of this option.
+//
+// Skipping applies to JSON object values, form-encoded field values, and
+// multipart text field values. Keys are still sanitized regardless of whether
+// the corresponding value is skipped.
+//
+// Field names are matched case-sensitively against the original key.
 func SkipFields(fields ...string) Option {
 	return func(c *config) {
 		for _, f := range fields {
@@ -136,9 +185,9 @@ func SkipFields(fields ...string) Option {
 	}
 }
 
-// WithMaxBodySize caps JSON and form-encoded request bodies.
-// Requests exceeding the limit are rejected with 413. Default: 1 MB.
-// Values <= 0 are ignored and the default is used.
+// WithMaxBodySize caps the request body size for JSON and form-encoded requests.
+// Requests whose body exceeds n bytes are rejected with HTTP 413.
+// The default limit is 1 MB (1 << 20 bytes). Values <= 0 are ignored.
 func WithMaxBodySize(n int64) Option {
 	return func(c *config) {
 		if n > 0 {
@@ -147,9 +196,9 @@ func WithMaxBodySize(n int64) Option {
 	}
 }
 
-// WithMaxMultipartSize caps multipart/form-data request bodies.
-// Requests exceeding the limit are rejected with 413. Default: 32 MB.
-// Values <= 0 are ignored and the default is used.
+// WithMaxMultipartSize caps the request body size for multipart/form-data requests.
+// Requests whose body exceeds n bytes are rejected with HTTP 413.
+// The default limit is 32 MB (32 << 20 bytes). Values <= 0 are ignored.
 func WithMaxMultipartSize(n int64) Option {
 	return func(c *config) {
 		if n > 0 {

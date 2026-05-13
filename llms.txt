@@ -1,0 +1,61 @@
+# xss-middleware
+
+> A Gin middleware that sanitizes XSS payloads from incoming HTTP requests before they reach route handlers.
+
+## Overview
+
+`github.com/codeskine/xss-middleware` is a single-package Go library (`package xss`) that registers as a [Gin](https://github.com/gin-gonic/gin) middleware via `r.Use(xss.New(...))`. It intercepts incoming requests, sanitizes string values using [bluemonday](https://github.com/microcosm-cc/bluemonday), and replaces `c.Request.Body` / `c.Request.URL.RawQuery` with the cleaned content before passing the request to route handlers.
+
+## Entry point
+
+`New(opts ...Option) gin.HandlerFunc` — constructs and returns the middleware. All configuration is captured at construction time; the returned handler is safe for concurrent use.
+
+## Supported content types
+
+| Method | Content-Type | What is sanitized |
+|---|---|---|
+| GET | — | Query string keys and values |
+| POST/PUT/PATCH | `application/json` | All string values and object keys (recursive) |
+| POST/PUT/PATCH | `application/x-www-form-urlencoded` | Keys and values |
+| POST/PUT/PATCH | `multipart/form-data` | Text field keys and values; binary parts pass through |
+
+Content-Type is matched case-insensitively via `mime.ParseMediaType`. All other methods/types pass through unmodified.
+
+## Configuration options
+
+```go
+xss.New(
+    xss.WithStrictPolicy(),           // strips all HTML (default)
+    xss.WithUGCPolicy(),              // keeps safe tags: b, i, em, a, img, …
+    xss.WithPolicy(p),                // custom *bluemonday.Policy
+    xss.SkipFields("token", "sig"),   // skip value sanitization for these fields
+    xss.WithMaxBodySize(512*1024),    // reject JSON/form bodies > 512 KB (default: 1 MB)
+    xss.WithMaxMultipartSize(10<<20), // reject multipart bodies > 10 MB (default: 32 MB)
+)
+```
+
+`"password"` is always skipped regardless of `SkipFields`.
+
+## Key implementation details
+
+- **JSON:** `json.Decoder.UseNumber()` preserves numeric precision. Sanitization is recursive with a depth cap of 64 to prevent stack overflow. Object keys are sanitized in a separate pass to avoid map mutation during iteration. Key rename collisions use first-rename-wins (non-deterministic due to Go map iteration order).
+- **Multipart:** Binary parts are detected by an explicit Content-Type allowlist (`image/*`, `video/*`, `audio/*`, `application/octet-stream`, `application/pdf`, `application/zip`, `application/gzip`, `application/x-tar`). All other Content-Types, including `application/javascript`, are sanitized.
+- **Body size limits:** Enforced via `io.LimitReader` + `countingReader`. Exceeded limits return HTTP 413; malformed input returns HTTP 400.
+- **Thread safety:** All per-request state is stack-local. The policy and skip map are captured as immutable closure variables.
+
+## Files
+
+- `xss.go` — all middleware logic (≈370 lines)
+- `xss_test.go` — 37 tests including regression, security, and race-condition coverage
+- `example_test.go` — runnable `ExampleXxx` functions
+
+## Dependencies
+
+- `github.com/gin-gonic/gin` — HTTP framework
+- `github.com/microcosm-cc/bluemonday` — HTML sanitizer
+
+## Installation
+
+```bash
+go get github.com/codeskine/xss-middleware
+```

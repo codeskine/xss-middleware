@@ -186,27 +186,7 @@ func sanitizeValue(v *any, p *bluemonday.Policy, skip map[string]bool, depth int
 	}
 	switch val := (*v).(type) {
 	case map[string]any:
-		for k, child := range val {
-			if skip[k] {
-				continue
-			}
-			sanitizeValue(&child, p, skip, depth+1)
-			val[k] = child
-		}
-		// collect key renames before applying — avoids map mutation during iteration
-		type rename struct{ old, new string }
-		var renames []rename
-		for k := range val {
-			if clean := p.Sanitize(k); clean != k {
-				renames = append(renames, rename{k, clean})
-			}
-		}
-		for _, r := range renames {
-			if _, exists := val[r.new]; !exists {
-				val[r.new] = val[r.old]
-			}
-			delete(val, r.old)
-		}
+		sanitizeMap(val, p, skip, depth)
 	case []any:
 		for i := range val {
 			sanitizeValue(&val[i], p, skip, depth+1)
@@ -214,6 +194,30 @@ func sanitizeValue(v *any, p *bluemonday.Policy, skip map[string]bool, depth int
 	case string:
 		*v = p.Sanitize(val)
 		// json.Number, bool, nil: pass through unchanged
+	}
+}
+
+func sanitizeMap(val map[string]any, p *bluemonday.Policy, skip map[string]bool, depth int) {
+	for k, child := range val {
+		if skip[k] {
+			continue
+		}
+		sanitizeValue(&child, p, skip, depth+1)
+		val[k] = child
+	}
+	// collect key renames before applying — avoids map mutation during iteration
+	type rename struct{ old, new string }
+	var renames []rename
+	for k := range val {
+		if clean := p.Sanitize(k); clean != k {
+			renames = append(renames, rename{k, clean})
+		}
+	}
+	for _, r := range renames {
+		if _, exists := val[r.new]; !exists { // first rename wins on collision
+			val[r.new] = val[r.old]
+		}
+		delete(val, r.old)
 	}
 }
 
@@ -292,35 +296,7 @@ func handleMultipart(c *gin.Context, p *bluemonday.Policy, skip map[string]bool,
 		if err != nil {
 			return err
 		}
-
-		fw, err := mw.CreatePart(part.Header)
-		if err != nil {
-			return err
-		}
-
-		fieldName := part.FormName()
-
-		ct := part.Header.Get("Content-Type")
-		if ct != "" && !strings.HasPrefix(ct, "text/") {
-			if _, err := io.Copy(fw, part); err != nil {
-				return err
-			}
-			continue
-		}
-
-		if skip[fieldName] {
-			if _, err := io.Copy(fw, part); err != nil {
-				return err
-			}
-			continue
-		}
-
-		fieldBytes, err := io.ReadAll(part)
-		if err != nil {
-			return err
-		}
-		sanitized := p.Sanitize(string(fieldBytes))
-		if _, err := fw.Write([]byte(sanitized)); err != nil {
+		if err := sanitizePart(part, mw, p, skip); err != nil {
 			return err
 		}
 	}
@@ -330,4 +306,26 @@ func handleMultipart(c *gin.Context, p *bluemonday.Policy, skip map[string]bool,
 	}
 	c.Request.Body = io.NopCloser(&buf)
 	return nil
+}
+
+func sanitizePart(part *multipart.Part, mw *multipart.Writer, p *bluemonday.Policy, skip map[string]bool) error {
+	fw, err := mw.CreatePart(part.Header)
+	if err != nil {
+		return err
+	}
+	ct := part.Header.Get("Content-Type")
+	if ct != "" && !strings.HasPrefix(ct, "text/") {
+		_, err = io.Copy(fw, part)
+		return err
+	}
+	if skip[part.FormName()] {
+		_, err = io.Copy(fw, part)
+		return err
+	}
+	fieldBytes, err := io.ReadAll(part)
+	if err != nil {
+		return err
+	}
+	_, err = fw.Write([]byte(p.Sanitize(string(fieldBytes))))
+	return err
 }

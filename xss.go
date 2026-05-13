@@ -695,8 +695,59 @@ func SkipFields(fields ...string) Option {
 	}
 }
 
+func sanitizeJSON(body io.Reader, p *bluemonday.Policy, skip map[string]bool) ([]byte, error) {
+	var v interface{}
+	d := json.NewDecoder(body)
+	d.UseNumber() // preserves numeric precision (no float64 precision loss)
+	if err := d.Decode(&v); err != nil {
+		return nil, err
+	}
+	sanitizeValue(&v, p, skip)
+	return json.Marshal(v)
+}
+
+func sanitizeValue(v *interface{}, p *bluemonday.Policy, skip map[string]bool) {
+	switch val := (*v).(type) {
+	case map[string]interface{}:
+		for k, child := range val {
+			if skip[k] {
+				continue
+			}
+			sanitizeValue(&child, p, skip)
+			val[k] = child
+		}
+		// collect key renames before applying — avoids map mutation during iteration
+		type rename struct{ old, new string }
+		var renames []rename
+		for k := range val {
+			if clean := p.Sanitize(k); clean != k {
+				renames = append(renames, rename{k, clean})
+			}
+		}
+		for _, r := range renames {
+			val[r.new] = val[r.old]
+			delete(val, r.old)
+		}
+	case []interface{}:
+		for i := range val {
+			sanitizeValue(&val[i], p, skip)
+		}
+	case string:
+		*v = p.Sanitize(val)
+		// json.Number, bool, nil: pass through unchanged
+	}
+}
+
 func handleJSON(c *gin.Context, p *bluemonday.Policy, skip map[string]bool) error {
-	return nil // stub — implemented in Task 2
+	if c.Request.Body == nil {
+		return nil
+	}
+	out, err := sanitizeJSON(c.Request.Body, p, skip)
+	if err != nil {
+		return err
+	}
+	c.Request.Body = io.NopCloser(bytes.NewReader(out))
+	return nil
 }
 
 func handleGET(c *gin.Context, p *bluemonday.Policy, skip map[string]bool) error {

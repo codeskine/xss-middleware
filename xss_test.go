@@ -528,3 +528,34 @@ func TestMultipartBinaryPartPreserved(t *testing.T) {
 	s.ServeHTTP(resp, req)
 	assert.Equal(t, http.StatusOK, resp.Code)
 }
+
+// Two JSON keys that both sanitize to the same string — one value must survive, no crash
+func TestJsonKeyCollision(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s := newServer()
+	req, _ := http.NewRequest("POST", "/echo", strings.NewReader(`{"<b>x</b>":"v1","<i>x</i>":"v2"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	s.ServeHTTP(resp, req)
+	assert.Equal(t, http.StatusOK, resp.Code)
+	var result map[string]string
+	assert.NoError(t, json.Unmarshal(resp.Body.Bytes(), &result))
+	// Exactly one key "x" must survive with one of the two original values
+	assert.Contains(t, []string{"v1", "v2"}, result["x"])
+	assert.Len(t, result, 1)
+}
+
+// JSON nested 65 levels deep must not stack overflow; deep values are nil'd
+func TestJsonMaxDepth(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s := newServer()
+	payload := strings.Repeat("[", 65) + `"<script>xss</script>"` + strings.Repeat("]", 65)
+	req, _ := http.NewRequest("POST", "/echo", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	assert.NotPanics(t, func() {
+		s.ServeHTTP(resp, req)
+	})
+	assert.Equal(t, http.StatusOK, resp.Code)
+	assert.NotContains(t, resp.Body.String(), "<script>")
+}

@@ -30,6 +30,7 @@ import (
 const (
 	defaultMaxBodySize      = 1 << 20  // 1 MB
 	defaultMaxMultipartSize = 32 << 20 // 32 MB
+	maxJSONDepth            = 64
 )
 
 var errBodyTooLarge = errors.New("request body too large")
@@ -174,18 +175,22 @@ func sanitizeJSON(body io.Reader, p *bluemonday.Policy, skip map[string]bool) ([
 	if err := d.Decode(&v); err != nil {
 		return nil, err
 	}
-	sanitizeValue(&v, p, skip)
+	sanitizeValue(&v, p, skip, 0)
 	return json.Marshal(v)
 }
 
-func sanitizeValue(v *any, p *bluemonday.Policy, skip map[string]bool) {
+func sanitizeValue(v *any, p *bluemonday.Policy, skip map[string]bool, depth int) {
+	if depth > maxJSONDepth {
+		*v = nil
+		return
+	}
 	switch val := (*v).(type) {
 	case map[string]any:
 		for k, child := range val {
 			if skip[k] {
 				continue
 			}
-			sanitizeValue(&child, p, skip)
+			sanitizeValue(&child, p, skip, depth+1)
 			val[k] = child
 		}
 		// collect key renames before applying — avoids map mutation during iteration
@@ -197,12 +202,14 @@ func sanitizeValue(v *any, p *bluemonday.Policy, skip map[string]bool) {
 			}
 		}
 		for _, r := range renames {
-			val[r.new] = val[r.old]
+			if _, exists := val[r.new]; !exists {
+				val[r.new] = val[r.old]
+			}
 			delete(val, r.old)
 		}
 	case []any:
 		for i := range val {
-			sanitizeValue(&val[i], p, skip)
+			sanitizeValue(&val[i], p, skip, depth+1)
 		}
 	case string:
 		*v = p.Sanitize(val)
